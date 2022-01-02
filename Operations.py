@@ -4,8 +4,9 @@ import requests
 from requests.api import request
 from Authentication import get_bearer_auth_header
 from Utils import pretty_json
-
-ONEDRIVE_ROOT = "/tmp/test1"
+from Config import save_item_remoteinfo_to_db
+from Item import get_etag_from_local
+from Globals import ONEDRIVE_ROOT
 
 def get_drive_information():
     url = "https://graph.microsoft.com/v1.0/me/drives"
@@ -44,7 +45,12 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
                 
         if "file" in item:
             print("File " + item["name"] + " " + item["id"])
-            sync_onedrive_to_disk_file(item["name"], item["parentReference"]["path"].split(":")[1], item["@microsoft.graph.downloadUrl"])
+            if item["eTag"] == get_etag_from_local(item["id"]): # Skip download
+                print(f'Skiping file {item["name"]} with id {item["id"]}')
+            else: # Download and replace existing
+                sync_onedrive_to_disk_file(item["name"], item["parentReference"]["path"].split(":")[1], item["@microsoft.graph.downloadUrl"])
+
+        save_item_remoteinfo_to_db(item["id"], item)
     
     if "@odata.nextLink" in jsonResponse:
         sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=jsonResponse["@odata.nextLink"])

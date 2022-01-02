@@ -78,7 +78,7 @@ def authenticate():
     
     current_bearer_token = get_current_bearer()
     
-    if current_bearer_token is None:
+    if current_bearer_token is None or current_bearer_token == "":
         code = open_auth_page()
         bearer_response = get_bearer_token(code)
         save_bearer_response(bearer_response)
