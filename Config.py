@@ -1,7 +1,7 @@
 import os
 import json
 from Item import get_etag_from_local
-from Globals import SECRETS_FILE, CONFIG_FOLDER, ONEDRIVE_DB_FOLDER
+from Globals import SECRETS_FILE, CONFIG_FOLDER, ONEDRIVE_DB_FOLDER, EXCLUDE_FILE
 
 
 def check_secrets_file_exist():    
@@ -53,7 +53,16 @@ def save_item_remoteinfo_to_db(id, jsonInfo):
         json.dump(jsonInfo, outfile)
         
     print(get_etag_from_local(id))
-        
+
+def get_exclude_list():
+    with open(EXCLUDE_FILE, "r") as excludefile:
+        r = json.load(excludefile)
+    return r["exclude"]    
+
+EXCLUDE_LIST = get_exclude_list()
+for e in EXCLUDE_LIST:
+    print(e["path"])
+    
 #def save_deltalink_to_db(token):
     
     
