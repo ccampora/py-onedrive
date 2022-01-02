@@ -65,6 +65,10 @@ def get_refresh_token():
 def print_current_bearer():
     print(get_current_bearer())
 
+def get_bearer_auth_header():
+    current_bearer_token = get_current_bearer()
+    return { "Authorization": f'Bearer {current_bearer_token}'}
+
 # Runs the auth flow. If no bearer token is found, it creates one, or refresh if expired.
 # return:
 # True is a new Bearer was acquired or the current one is valid
@@ -81,10 +85,3 @@ def authenticate():
     
     refresh_response = get_refresh_token()
     save_bearer_response(refresh_response)
-    
-    
-        
-    
-
-            
-
