@@ -1,7 +1,7 @@
 import os
 import json
 from Item import get_etag_from_local
-from Globals import SECRETS_FILE, CONFIG_FOLDER, ONEDRIVE_DB_FOLDER
+from Globals import DELTALINK_FILE, SECRETS_FILE, CONFIG_FOLDER, ONEDRIVE_DB_FOLDER, EXCLUDE_FILE
 
 
 def check_secrets_file_exist():    
@@ -53,7 +53,50 @@ def save_item_remoteinfo_to_db(id, jsonInfo):
         json.dump(jsonInfo, outfile)
         
     print(get_etag_from_local(id))
+
+def get_exclude_list():
+    with open(EXCLUDE_FILE, "r") as excludefile:
+        r = json.load(excludefile)
+    return r["exclude"]    
+
+EXCLUDE_LIST = get_exclude_list()
+for e in EXCLUDE_LIST:
+    print(e["path"])
+    
+    """
+    Checks if the deltalink file described in DELTALINK_FILE parameters exists. If not, then creates a stub. 
+    """
+def check_deltalink_file_exist():    
+    # Is not exists then create stub file
+    if os.path.isfile(DELTALINK_FILE) is False:
+        stub_deltalink = {
+            "deltalink": ""
+        }
         
-#def save_deltalink_to_db(token):
+        with open(DELTALINK_FILE, "w") as outfile:
+            json.dump(stub_deltalink, outfile)    
+
+
+    """
+    Saves the deltalink to the db for later usage
+    """
+def save_deltalink_to_db(deltaToken):
+    
+    check_deltalink_file_exist()
+    
+    with open(DELTALINK_FILE, "w") as file:
+        json.dump({ "deltalink" : deltaToken}, file)
+
+
+    """
+    Returns the deltalink that was previously save after the last delta call
+    """
+def get_deltalink_from_db():
+    
+    with open(DELTALINK_FILE, "r") as file:
+        r = json.load(file)
+    
+    return r["deltalink"]
+        
     
     
