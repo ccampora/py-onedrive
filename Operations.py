@@ -4,7 +4,7 @@ import requests
 from requests.api import request
 from Authentication import get_bearer_auth_header
 from Utils import pretty_json
-from Config import save_item_remoteinfo_to_db
+from Config import save_deltalink_to_db, save_item_remoteinfo_to_db
 from Item import get_etag_from_local
 from Globals import ONEDRIVE_ROOT
 from Config import EXCLUDE_LIST
@@ -53,7 +53,7 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
 
         if "file" in item:
             print("Path " + item["parentReference"]["path"] + "File " + item["name"] + " " + item["id"])
-            # Skip download
+            # Skip download - no changes from last sync
             if item["eTag"] == get_etag_from_local(item["id"]):
                 print(f'Skiping file {item["name"]} with id {item["id"]}')
             else:  # Download and replace existing
@@ -64,6 +64,9 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
     if "@odata.nextLink" in jsonResponse:
         sync_onedrive_to_disk(onedrive_root_folder, local_path,
                               next_link=jsonResponse["@odata.nextLink"])
+    
+    if "@odata.deltaLink" in jsonResponse:
+        save_deltalink_to_db(deltaToken=jsonResponse["@odata.deltaLink"])
 
 
 def sync_onedrive_to_disk_folder(folder_name, path):
