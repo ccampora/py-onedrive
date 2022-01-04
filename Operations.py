@@ -4,7 +4,7 @@ import requests
 from requests.api import request
 from Authentication import get_bearer_auth_header
 from Utils import pretty_json
-from Config import save_deltalink_to_db, save_item_remoteinfo_to_db
+from Config import get_deltalink_from_db, save_deltalink_to_db, save_item_remoteinfo_to_db
 from Item import get_etag_from_local
 from Globals import ONEDRIVE_ROOT
 from Config import EXCLUDE_LIST
@@ -23,10 +23,14 @@ def get_drive_information():
 
 
 def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
-    if next_link is None:
-        url = "https://graph.microsoft.com/v1.0/me/drive/root/delta"
-    else:
+    
+    delta_link = get_deltalink_from_db()
+    if delta_link is not "":
+        url = delta_link
+    elif next_link is not None:
         url = next_link
+    else:
+        url = "https://graph.microsoft.com/v1.0/me/drive/root/delta"
 
     print(next_link)
 

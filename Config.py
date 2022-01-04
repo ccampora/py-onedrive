@@ -93,6 +93,8 @@ def save_deltalink_to_db(deltaToken):
     """
 def get_deltalink_from_db():
     
+    check_deltalink_file_exist()
+    
     with open(DELTALINK_FILE, "r") as file:
         r = json.load(file)
     
