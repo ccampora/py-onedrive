@@ -39,4 +39,17 @@ the first time it will require you to login into your Microsoft Account. If the 
 
 `https://login.microsoftonline.com/common/oauth2/nativeclient?code={copy this}`
 
+# Run on contrab
+
+As for now the client is executed asynchronously. To run it on a recurrent fashion use a contrab
+
+Edit user contrab
+```
+contrab -u <your user> -e
+```
+Add a new entry to run each minute
+```
+* * * * * python <path to cloned folder>/Onedrive.py >> $HOME/.py-onedrive/py-onedrive.log
+```
+
 
