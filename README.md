@@ -20,14 +20,14 @@ There is no need for further configuration. The default location to sync is $HOM
 In order to use the Exclude functionality: in $HOME/.py-onedrive create the file .py-onedrive-exclude and exclude folders as needed.
 
 Format Example: 
-`
+```
 {
 	"exclude": [
 		{ "path": ":/Pictures" },
     		{ "path": ":/Others/01" }
 	]
 }
-`
+```
 
 # Run 
 
