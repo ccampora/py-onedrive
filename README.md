@@ -5,6 +5,7 @@ Onedrive client made in Python (for educ purposes)
 
 * Authentication
 * Sync onedrive to disk (one-way-direcction)
+* Sync files and folder deletion from onedrive to disk (one-way-direcction)
 * Exclude folder tree
 * OneDrive Personal Only
 
@@ -23,7 +24,7 @@ Format Example:
 {
 	"exclude": [
 		{ "path": ":/Pictures" },
-    { "path": ":/Others/01" }
+    		{ "path": ":/Others/01" }
 	]
 }
 `
