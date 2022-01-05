@@ -39,11 +39,11 @@ the first time it will require you to login into your Microsoft Account. If the 
 
 `https://login.microsoftonline.com/common/oauth2/nativeclient?code={copy this}`
 
-# Run on contrab
+# Run on crontab
 
 As for now the client is executed asynchronously. To run it on a recurrent fashion use a contrab
 
-Edit user contrab
+Edit user crontab
 ```
 contrab -u <your user> -e
 ```
