@@ -51,8 +51,6 @@ def save_item_remoteinfo_to_db(id, jsonInfo):
     
     with open(path, "w") as outfile:
         json.dump(jsonInfo, outfile)
-        
-    print(get_etag_from_local(id))
 
 def get_exclude_list():
     with open(EXCLUDE_FILE, "r") as excludefile:
@@ -60,6 +58,8 @@ def get_exclude_list():
     return r["exclude"]    
 
 EXCLUDE_LIST = get_exclude_list()
+
+print("Exclude List: ")
 for e in EXCLUDE_LIST:
     print(e["path"])
     
