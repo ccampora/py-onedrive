@@ -39,6 +39,8 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
     jsonResponse = r.json()
     
     items_list = jsonResponse["value"]
+    
+    pending_folder_deletion = []
 
     for item in items_list:
         # print(pretty_json(item))
@@ -72,8 +74,14 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
                     ":")[1], item["@microsoft.graph.downloadUrl"])
 
         if "deleted" in item:
+            # If the directory is not empty, then is added to the second queue in reverse order.
+            # When all the items in the first queue are proccesed, all the files should have been deleted. 
+            # Folders cannot be deleted unless they are empty, hence those items are added to a second queue in reverse order.
+            # The second queue will be processed after the first queue is done.
+            # Issue: #5
             if delete_item_from_disk(item["id"]) is False:
-                items_list.append(item)
+                pending_folder_deletion.insert(0, item)
+                #items_list.append(item)
         else:
             save_item_remoteinfo_to_db(item["id"], item)
 
@@ -84,7 +92,16 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
     if "@odata.deltaLink" in jsonResponse:
         save_deltalink_to_db(deltaToken=jsonResponse["@odata.deltaLink"])
 
-
+    # Deletes pending folders. By this point all folders should be empty, if the count files of any is not 0 this 
+    # means some files were not deleted and the folder can't be deleted. This should trow some kind of exception. 
+    # Issue: #5
+    # TODO: Log exception
+    
+    for folder in pending_folder_deletion:
+        if delete_item_from_disk(folder["id"]) is False:
+            # TODO: Throw exception or log
+            continue
+    
 def sync_onedrive_to_disk_folder(folder_name, path):
     folder_full_path = f'{ONEDRIVE_ROOT}{path}/{folder_name}'
 
