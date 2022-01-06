@@ -5,9 +5,8 @@ from requests.api import request
 from Authentication import get_bearer_auth_header
 from Utils import pretty_json, get_folder_from_path
 from Config import get_deltalink_from_db, save_deltalink_to_db, save_item_remoteinfo_to_db
-from Item import get_etag_from_local
+from Item import get_etag_from_local, is_excluded
 from Globals import ONEDRIVE_DB_FOLDER, ONEDRIVE_ROOT
-from Config import EXCLUDE_LIST
 from Globals import LOGGER as logger
 
 
@@ -179,9 +178,3 @@ def delete_item_from_disk(item_id):
         logger.warn(f'The item {item_id} with path {item_path_on_disk} does not exist')
         
     return True
-
-def is_excluded(path):
-    for e in EXCLUDE_LIST:
-        if path.find(e["path"]) != -1:
-            return True
-    return False
