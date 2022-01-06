@@ -4,6 +4,7 @@ import requests
 from Config import get_current_bearer
 from Config import get_current_refresh_token
 from Config import save_bearer_response
+from Globals import LOGGER as logger
 
 # AUTH URL https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=22c49a0d-d21c-4792-aed1-8f163c982546&scope=Files.ReadWrite%20Files.ReadWrite.all%20Sites.ReadWrite.All%20offline_access&response_type=code&redirect_uri=https://login.microsoftonline.com/common/oauth2/nativeclient
 
@@ -38,7 +39,7 @@ def get_bearer_token(url_with_code):
     
     jsonResponse = r.json()
     for key, value in jsonResponse.items():
-        print(key, ":", value)
+        logger.debug(key, ":", value)
     return jsonResponse
 
 
@@ -59,11 +60,11 @@ def get_refresh_token():
     jsonResponse = r.json()
     
     for key, value in jsonResponse.items():
-        print(key, ":", value)
+        logger.debug(f'{key} : {value}')
     return jsonResponse
     
 def print_current_bearer():
-    print(get_current_bearer())
+    logger.debug("Current bearer token is: %s", get_current_bearer())
 
 def get_bearer_auth_header():
     current_bearer_token = get_current_bearer()

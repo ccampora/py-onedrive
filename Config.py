@@ -2,6 +2,8 @@ import os
 import json
 from Item import get_etag_from_local
 from Globals import DELTALINK_FILE, SECRETS_FILE, CONFIG_FOLDER, ONEDRIVE_DB_FOLDER, EXCLUDE_FILE
+from Globals import LOGGER as logger
+
 
 EXCLUDE_LIST = []
 
@@ -63,10 +65,10 @@ def get_exclude_list():
 def init_config():
 
     EXCLUDE_LIST = get_exclude_list()
-
-    print("Exclude List: ")
+    
+    logger.debug("Exclude List: ")
     for e in EXCLUDE_LIST:
-        print(e["path"])
+        logger.debug(e["path"])
     
     """
     Checks if the deltalink file described in DELTALINK_FILE parameters exists. If not, then creates a stub. 
