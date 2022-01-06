@@ -128,7 +128,10 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
 def sync_onedrive_to_disk_folder(folder_name, path):
     folder_full_path = f"{ONEDRIVE_ROOT}{path}/{folder_name}"
 
-    logger.info(f"Creating folder {folder_name} in {path}")
+    if path == "":
+        logger.info(f"Creating folder {folder_name} in /")
+    else:
+        logger.info(f"Creating folder {folder_name} in {path}")
     if os.path.exists(folder_full_path) is False:
         os.mkdir(folder_full_path)
 
