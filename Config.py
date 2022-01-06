@@ -3,6 +3,7 @@ import json
 from Item import get_etag_from_local
 from Globals import DELTALINK_FILE, SECRETS_FILE, CONFIG_FOLDER, ONEDRIVE_DB_FOLDER, EXCLUDE_FILE
 
+EXCLUDE_LIST = []
 
 def check_secrets_file_exist():    
     # Is not exists then create stub file
@@ -57,11 +58,15 @@ def get_exclude_list():
         r = json.load(excludefile)
     return r["exclude"]    
 
-EXCLUDE_LIST = get_exclude_list()
+    """Initialize the EXCLUDE_LIST 
+    """
+def init_config():
 
-print("Exclude List: ")
-for e in EXCLUDE_LIST:
-    print(e["path"])
+    EXCLUDE_LIST = get_exclude_list()
+
+    print("Exclude List: ")
+    for e in EXCLUDE_LIST:
+        print(e["path"])
     
     """
     Checks if the deltalink file described in DELTALINK_FILE parameters exists. If not, then creates a stub. 
