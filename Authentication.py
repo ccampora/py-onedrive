@@ -39,7 +39,7 @@ def get_bearer_token(url_with_code):
     
     jsonResponse = r.json()
     for key, value in jsonResponse.items():
-        logger.debug(key, ":", value)
+        logger.debug(f'{key}:{value}')
     return jsonResponse
 
 
