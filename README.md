@@ -41,11 +41,10 @@ the first time it will require you to login into your Microsoft Account. If the 
 
 # Run on crontab
 
-As for now the client is executed asynchronously. To run it on a recurrent fashion use a contrab
-
+As for now the client is executed asynchronously. To run it on a recurrent fashion use a crontab
 Edit user crontab
 ```
-contrab -u <your user> -e
+crontab -u <your user> -e
 ```
 Add a new entry to run each minute
 ```
