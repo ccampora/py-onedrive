@@ -46,6 +46,10 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
 
     pending_folder_deletion = []
 
+    if len(items_list) == 0:
+        logger.info("Nothing to sync")
+        return 
+    
     for item in items_list:
         logger.debug("Processing item content: %s", pretty_json(item))
 
