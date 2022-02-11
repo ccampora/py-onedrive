@@ -29,10 +29,10 @@ def get_drive_information():
 def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
 
     delta_link = get_deltalink_from_db()
-    if delta_link != "":
-        url = delta_link
-    elif next_link is not None:
+    if next_link is not None:
         url = next_link
+    elif delta_link != "":
+        url = delta_link
     else:
         url = "https://graph.microsoft.com/v1.0/me/drive/root/delta"
 
