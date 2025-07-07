@@ -23,15 +23,21 @@ def is_excluded(path):
 Returns the EXCLUDE_LIST
 """
 def get_exclude_list():
-    with open(EXCLUDE_FILE, "r") as excludefile:
-        r = json.load(excludefile)
+    """Get the list of excluded folders/files"""
+    # Check if exclude file exists, if not create it with empty list
+    if not os.path.exists(EXCLUDE_FILE):
+        # Create the directory if it doesn't exist
+        os.makedirs(os.path.dirname(EXCLUDE_FILE), exist_ok=True)
+        # Create empty exclude file
+        with open(EXCLUDE_FILE, "w") as excludefile:
+            json.dump([], excludefile)
+        return []
     
-    ex_list = r["exclude"]
+    try:
+        with open(EXCLUDE_FILE, "r") as excludefile:
+            return json.load(excludefile)
+    except (json.JSONDecodeError, FileNotFoundError):
+        # If file is corrupted or doesn't exist, return empty list
+        return []
 
-    logger.info("Exclude List: ")
-    for e in ex_list:
-        logger.info(e["path"])
-    
-    return ex_list
-        
 EXCLUDE_LIST = get_exclude_list()

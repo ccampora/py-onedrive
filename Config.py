@@ -1,7 +1,24 @@
 import os
 import json
-from Globals import DELTALINK_FILE, SECRETS_FILE, CONFIG_FOLDER, ONEDRIVE_DB_FOLDER, EXCLUDE_FILE
-from Globals import LOGGER as logger
+from Globals import CONFIG_FOLDER, SECRETS_FILE, ONEDRIVE_DB_FOLDER, EXCLUDE_FILE, DELTALINK_FILE
+
+def initialize_config():
+    """Initialize configuration directories and files"""
+    # Create main config directory
+    os.makedirs(CONFIG_FOLDER, exist_ok=True)
+    
+    # Create database directory
+    os.makedirs(ONEDRIVE_DB_FOLDER, exist_ok=True)
+    
+    # Create exclude file if it doesn't exist
+    if not os.path.exists(EXCLUDE_FILE):
+        with open(EXCLUDE_FILE, "w") as f:
+            json.dump([], f)
+    
+    # Create deltalink file if it doesn't exist
+    if not os.path.exists(DELTALINK_FILE):
+        with open(DELTALINK_FILE, "w") as f:
+            f.write("")
 
 def check_secrets_file_exist():    
     # Is not exists then create stub file
