@@ -81,6 +81,13 @@ def authenticate():
     
     if current_bearer_token is None or current_bearer_token == "":
         code = open_auth_page()
+
+        # If the user enters the full URL with the code, extract the code part. Here is an example of the URL:
+        # https://login.microsoftonline.com/common/oauth2/nativeclient?code=M.C544_SN1.2.U.57860356-a37a-4209-d3d5-4d58dc16217d
+        if "code=" in code:
+            code = code.split("code=")[-1]
+        logger.info("Acquiring bearer token with code: %s", code)
+
         bearer_response = get_bearer_token(code)
         save_bearer_response(bearer_response)
     
