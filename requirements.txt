@@ -1,0 +1,6 @@
+# Production dependencies
+requests>=2.28.0
+
+# Development and testing dependencies
+pytest>=7.0.0
+pytest-cov>=4.0.0

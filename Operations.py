@@ -28,6 +28,11 @@ def get_drive_information():
 
 def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
 
+    # Check if the onedrive root folder exists, if not create it
+    if not os.path.exists(ONEDRIVE_ROOT):
+        logger.info(f"Creating onedrive root folder at {ONEDRIVE_ROOT}")
+        os.makedirs(ONEDRIVE_ROOT, exist_ok=True)
+
     delta_link = get_deltalink_from_db()
     if next_link is not None:
         url = next_link
@@ -95,7 +100,9 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
                 sync_onedrive_to_disk_file(
                     item["name"],
                     item["parentReference"]["path"].split(":")[1],
-                    item["@microsoft.graph.downloadUrl"],
+                    #item["@microsoft.graph.downloadUrl"],
+                    #item["webUrl"],
+                    f'https://graph.microsoft.com/v1.0/me/drive/items/{item["id"]}/content',
                 )
 
         if "deleted" in item:
