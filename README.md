@@ -17,11 +17,14 @@ Onedrive client made in Python (for educ purposes)
 
 There is no need for further configuration. The default location to sync is $HOME/onedrive. Make sure that folder exists. 
 
-In order to use the Exclude functionality: in $HOME/.py-onedrive create the file .py-onedrive-exclude and exclude folders as needed.
+In order to use the Include / Exclude functionality: in $HOME/.py-onedrive create the file .py-onedrive-folders and include or exclude folders as needed. By default it will always include files (only) in the root directory
 
 Format Example: 
 ```
 {
+	"include": [
+                { "path": ":/Documents" }
+        ],
 	"exclude": [
 		{ "path": ":/Pictures" },
     		{ "path": ":/Others/01" }
