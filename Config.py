@@ -1,6 +1,6 @@
 import os
 import json
-from Globals import CONFIG_FOLDER, SECRETS_FILE, ONEDRIVE_DB_FOLDER, EXCLUDE_FILE, DELTALINK_FILE
+from Globals import CONFIG_FOLDER, SECRETS_FILE, ONEDRIVE_DB_FOLDER, INCLUDE_EXCLUDE_FILE, DELTALINK_FILE
 
 def initialize_config():
     """Initialize configuration directories and files"""
@@ -11,8 +11,8 @@ def initialize_config():
     os.makedirs(ONEDRIVE_DB_FOLDER, exist_ok=True)
     
     # Create exclude file if it doesn't exist
-    if not os.path.exists(EXCLUDE_FILE):
-        with open(EXCLUDE_FILE, "w") as f:
+    if not os.path.exists(INCLUDE_EXCLUDE_FILE):
+        with open(INCLUDE_EXCLUDE_FILE, "w") as f:
             json.dump([], f)
     
     # Create deltalink file if it doesn't exist

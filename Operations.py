@@ -9,7 +9,7 @@ from Config import (
     save_deltalink_to_db,
     save_item_remoteinfo_to_db,
 )
-from Item import get_etag_from_local, is_excluded
+from Item import get_etag_from_local, is_excluded, is_included, should_download_simple
 from Globals import ONEDRIVE_DB_FOLDER, ONEDRIVE_ROOT
 from Globals import LOGGER as logger
 
@@ -58,21 +58,12 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
     for item in items_list:
         logger.debug("Processing item content: %s", pretty_json(item))
 
-        if (
-            "parentReference" in item
-            and "path" in item["parentReference"]
-            and is_excluded(f'{item["parentReference"]["path"]}/{item["name"]}')
-        ):
-            logger.debug(
-                f'Excluding {item["parentReference"]["path"].split(":")[1]}/{item["name"]}'
-            )
+        if (item["name"] == "root"):
             continue
         
-        # If root item then exclude
-        if "root" in item:
-            logger.debug("Skiping root item")
+        if not should_download_simple(item):
             continue
-
+         
         if "folder" in item:
             if "parentReference" in item and "path" in item["parentReference"]:
 
@@ -152,17 +143,29 @@ def sync_onedrive_to_disk_file(file_name, path, url):
     logger.info(f"Getting file {file_name} from {path}")
     file_full_path = f"{ONEDRIVE_ROOT}{path}/{file_name}"
 
-    auth_header = get_bearer_auth_header()
-    r = requests.get(url, headers=auth_header)
+    # Ensure parent directories exist
+    parent_dir = os.path.dirname(file_full_path)
+    os.makedirs(parent_dir, exist_ok=True)
 
-    with open(file_full_path, "wb") as f:
-        f.write(r.content)
+    try:
+        auth_header = get_bearer_auth_header()
+        r = requests.get(url, headers=auth_header)
 
-    """
-    Returns the item DB content as json
-    """
+        # Check if the download was successful
+        if r.status_code == 200:
+            with open(file_full_path, "wb") as f:
+                f.write(r.content)
+            logger.info(f"Successfully downloaded: {file_full_path}")
+        else:
+            logger.error(f"Failed to download file {file_name}. Status: {r.status_code}")
+            
+    except Exception as e:
+        logger.error(f"Error downloading file {file_name}: {str(e)}")
 
 
+"""
+Returns the item DB content as json
+"""
 def get_item_db_content(id):
     item_db_file = f"{ONEDRIVE_DB_FOLDER}/{id}"
 
@@ -170,7 +173,7 @@ def get_item_db_content(id):
         with open(item_db_file, "r") as file:
             return json.load(file)
     else:
-        logger.warn(f"Db file for {id} not found! Cant delete file")
+        logger.warning(f"Db file for {id} not found! Cant delete file")
         return ""
 
     """
@@ -194,7 +197,7 @@ def delete_item_from_disk(item_id):
     item_db_content = get_item_db_content(id=item_id)
 
     if item_db_content == "":
-        logger.warn(f"Cannot delete item with id {item_id}")
+        logger.warning(f"Cannot delete item with id {item_id}")
         return
 
     item_folder = get_folder_from_path(item_db_content["parentReference"]["path"])
@@ -216,6 +219,6 @@ def delete_item_from_disk(item_id):
 
         delete_item_db_entry(id=item_id)
     else:
-        logger.warn(f"The item {item_id} with path {item_path_on_disk} does not exist")
+        logger.warning(f"The item {item_id} with path {item_path_on_disk} does not exist")
 
     return True
