@@ -1,6 +1,7 @@
 import dataclasses
 import errno
 import os
+import re
 import stat
 import tempfile
 import time
@@ -17,6 +18,17 @@ from Operations import (
     create_folder, delete_remote_item, move_rename_item,
 )
 from Globals import LOGGER as logger
+
+# Temp/swap files that should never be uploaded to OneDrive.
+_SKIP_UPLOAD = re.compile(
+    r'\.sw[a-z]$'      # vim swap: .swp .swx .swo .swn …
+    r'|~$'             # editor backups ending with ~
+    r'|\.tmp$'         # generic temp files
+    r'|^~\$'           # Office lock files: ~$document.docx
+    r'|^\.~lock\.'     # LibreOffice lock files: .~lock.doc#
+    r'|\.kate-swp$',   # Kate editor swap
+    re.IGNORECASE,
+)
 
 
 @dataclasses.dataclass
@@ -427,6 +439,12 @@ class OneDriveFUSE(pyfuse3.Operations):
 
     def _upload(self, handle: _WriteHandle):
         """Blocking: read temp file and upload to OneDrive. Runs in a thread."""
+        if _SKIP_UPLOAD.search(handle.name):
+            logger.debug(f"[upload] skipping temp file '{handle.name}'")
+            if not handle.item_id:
+                self._index.delete(f"__pending__{handle.name}__{handle.parent_id}")
+            return
+
         with open(handle.tmp_path, "rb") as f:
             content = f.read()
         if handle.item_id:
@@ -517,11 +535,13 @@ class OneDriveFUSE(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         item_id = item["id"]
-        try:
-            await trio.to_thread.run_sync(lambda: delete_remote_item(item_id))
-        except IOError as e:
-            logger.error(f"unlink '{name}': {e}")
-            raise pyfuse3.FUSEError(errno.EIO)
+        # Skip the OneDrive DELETE for temp files that were never uploaded
+        if not _SKIP_UPLOAD.search(name):
+            try:
+                await trio.to_thread.run_sync(lambda: delete_remote_item(item_id))
+            except IOError as e:
+                logger.error(f"unlink '{name}': {e}")
+                raise pyfuse3.FUSEError(errno.EIO)
 
         inode = self._index.get_inode(item_id)
         self._index.delete(item_id)
