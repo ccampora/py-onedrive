@@ -26,7 +26,8 @@ _SKIP_UPLOAD = re.compile(
     r'|\.tmp$'         # generic temp files
     r'|^~\$'           # Office lock files: ~$document.docx
     r'|^\.~lock\.'     # LibreOffice lock files: .~lock.doc#
-    r'|\.kate-swp$',   # Kate editor swap
+    r'|\.kate-swp$'    # Kate editor swap
+    r'|^\d+$',         # vim write-permission probe (e.g. 4913)
     re.IGNORECASE,
 )
 
