@@ -1,3 +1,5 @@
+import time
+
 from Config import get_deltalink_from_db, save_deltalink_to_db
 from GraphAPI import (
     get as graph_get,
@@ -92,19 +94,28 @@ def download_file(item_id):
 def upload_new_file(parent_id, name, content):
     """Upload content as a new file. Returns the OneDrive item dict."""
     url = f"{_GRAPH}/items/{parent_id}:/{name}:/content"
-    try:
-        return put_bytes(url, content)
-    except GraphAPIError as e:
-        raise IOError(f"upload_new_file failed: {e}")
+    return _put_with_retry(url, content, "upload_new_file")
 
 
 def overwrite_file(item_id, content):
     """Replace content of an existing file. Returns the updated item dict."""
     url = f"{_GRAPH}/items/{item_id}/content"
+    return _put_with_retry(url, content, "overwrite_file")
+
+
+def _put_with_retry(url, content, label):
+    """PUT with one 404 retry to handle OneDrive eventual-consistency after a delete."""
     try:
         return put_bytes(url, content)
     except GraphAPIError as e:
-        raise IOError(f"overwrite_file failed: {e}")
+        if e.status_code == 404:
+            logger.warning(f"{label}: 404 on first attempt, retrying in 2s")
+            time.sleep(2)
+            try:
+                return put_bytes(url, content)
+            except GraphAPIError as e2:
+                raise IOError(f"{label} failed: {e2}")
+        raise IOError(f"{label} failed: {e}")
 
 
 def create_folder(parent_id, name):
