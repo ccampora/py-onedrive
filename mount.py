@@ -24,7 +24,7 @@ import trio
 from Authentication import authenticate
 from CacheManager import CacheManager
 from Config import create_pyonedrive_config_folder, init_onedrive_database
-from Globals import CACHE_FOLDER, ONEDRIVE_ROOT, LOGGER as logger
+from Globals import CACHE_FOLDER, LOGGER as logger
 from MetadataIndex import MetadataIndex
 from OneDriveFUSE import OneDriveFUSE
 from Operations import sync_metadata
@@ -41,7 +41,7 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--mountpoint",
-        default=ONEDRIVE_ROOT,
+        default=os.path.expanduser("~/Onedrive"),
         metavar="DIR",
         help="Directory to mount OneDrive",
     )

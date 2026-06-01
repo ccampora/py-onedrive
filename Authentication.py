@@ -63,9 +63,6 @@ def get_refresh_token():
         logger.debug(f'{key} : {value}')
     return jsonResponse
     
-def print_current_bearer():
-    logger.debug("Current bearer token is: %s", get_current_bearer())
-
 def get_bearer_auth_header():
     current_bearer_token = get_current_bearer()
     return { "Authorization": f'Bearer {current_bearer_token}'}

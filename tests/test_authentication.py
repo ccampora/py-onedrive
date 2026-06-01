@@ -3,11 +3,10 @@ from unittest.mock import patch, MagicMock, mock_open
 import json
 import requests
 from Authentication import (
-    get_auth_url, 
-    open_auth_page, 
-    get_bearer_token, 
-    get_refresh_token, 
-    print_current_bearer,
+    get_auth_url,
+    open_auth_page,
+    get_bearer_token,
+    get_refresh_token,
     get_bearer_auth_header,
     authenticate,
     AUTH_BASE_URL,
@@ -16,7 +15,7 @@ from Authentication import (
     AUTH_RESPONSE_TYPE,
     AUTH_REDIRECT_URI,
     CODE_BASE_URL,
-    CODE_GRANT_TYPE
+    CODE_GRANT_TYPE,
 )
 
 
@@ -112,15 +111,6 @@ class TestAuthentication(unittest.TestCase):
         # Verify the response
         self.assertEqual(result['access_token'], 'new_access_token')
         self.assertEqual(result['refresh_token'], 'new_refresh_token')
-    
-    @patch('Authentication.get_current_bearer', return_value='test_bearer_token')
-    @patch('Authentication.logger')
-    def test_print_current_bearer(self, mock_logger, mock_get_bearer):
-        """Test that print_current_bearer logs the correct message"""
-        print_current_bearer()
-        
-        # Verify that logger.debug was called with the correct message
-        mock_logger.debug.assert_called_once_with("Current bearer token is: %s", 'test_bearer_token')
     
     @patch('Authentication.get_current_bearer', return_value='test_bearer_token')
     def test_get_bearer_auth_header(self, mock_get_bearer):

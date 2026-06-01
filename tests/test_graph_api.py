@@ -253,7 +253,6 @@ def test_sync_metadata_uses_graph_api(tmp_path):
         patch("Operations.graph_get") as mock_graph,
         patch("Operations.get_deltalink_from_db", return_value=""),
         patch("Operations.save_deltalink_to_db"),
-        patch("Operations.should_download_simple", return_value=True),
     ):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"value": [], "@odata.deltaLink": "delta://v1"}
