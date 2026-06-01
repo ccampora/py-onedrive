@@ -49,29 +49,24 @@ if [[ -n "$PIDS" ]]; then
         kill -9 $PIDS 2>/dev/null || true
         sleep 1
     fi
+    # Always force a lazy unmount after killing — the transport endpoint
+    # stays broken until explicitly detached even after SIGKILL.
+    fusermount3 -uz "$MOUNTPOINT" 2>/dev/null || true
+    sleep 1
 else
     info "No existing mount process found"
 fi
 
 # ── Step 2: unmount any stale FUSE mount ──────────────────────────────────────
-if mountpoint -q "$MOUNTPOINT" 2>/dev/null; then
-    warn "Unmounting stale FUSE mount at $MOUNTPOINT..."
-    if fusermount3 -u "$MOUNTPOINT" 2>/dev/null; then
-        info "Unmounted cleanly"
-    else
-        warn "Clean unmount failed — trying lazy unmount"
-        fusermount3 -uz "$MOUNTPOINT" 2>/dev/null || true
-    fi
-    sleep 1
-elif [[ -d "$MOUNTPOINT" ]]; then
-    # Directory exists but not listed as a mountpoint — could still be stale
-    if ls "$MOUNTPOINT" &>/dev/null; then
-        : # accessible and not a stale mount
-    else
-        warn "Mountpoint appears stale — forcing lazy unmount"
-        fusermount3 -uz "$MOUNTPOINT" 2>/dev/null || true
-        sleep 1
-    fi
+# Use lazy unmount unconditionally — it's a no-op when nothing is mounted
+# and the only reliable option when the transport endpoint is broken.
+fusermount3 -uz "$MOUNTPOINT" 2>/dev/null || true
+
+# Verify the mountpoint is now accessible as a plain directory
+if [[ -e "$MOUNTPOINT" ]] && ! ls "$MOUNTPOINT" &>/dev/null; then
+    error "Mountpoint $MOUNTPOINT is still inaccessible after unmount."
+    error "Try: sudo umount -l $MOUNTPOINT"
+    exit 1
 fi
 
 # ── Step 3: ensure mountpoint directory exists ────────────────────────────────
