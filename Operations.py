@@ -10,7 +10,7 @@ from Config import (
     save_item_remoteinfo_to_db,
 )
 from Item import get_etag_from_local, is_excluded, is_included, should_download_simple
-from GraphAPI import get as graph_get, GraphAPIError
+from GraphAPI import get as graph_get, put_bytes, post_json, patch_json, delete_item as graph_delete, GraphAPIError
 from Globals import ONEDRIVE_DB_FOLDER, ONEDRIVE_ROOT
 from Globals import LOGGER as logger
 
@@ -306,3 +306,89 @@ def download_file(item_id):
         if e.status_code == 404:
             raise FileNotFoundError(str(e))
         raise IOError(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Write operations (upload, create folder, delete, rename/move)
+# ---------------------------------------------------------------------------
+
+_GRAPH = "https://graph.microsoft.com/v1.0/me/drive"
+
+
+def upload_new_file(parent_id, name, content):
+    """
+    Upload content as a new file under parent_id.
+    Returns the OneDrive item dict from the API response.
+    Raises IOError on failure.
+    """
+    url = f"{_GRAPH}/items/{parent_id}:/{name}:/content"
+    try:
+        return put_bytes(url, content)
+    except GraphAPIError as e:
+        raise IOError(f"upload_new_file failed: {e}")
+
+
+def overwrite_file(item_id, content):
+    """
+    Replace the content of an existing file by item ID.
+    Returns the updated OneDrive item dict.
+    Raises IOError on failure.
+    """
+    url = f"{_GRAPH}/items/{item_id}/content"
+    try:
+        return put_bytes(url, content)
+    except GraphAPIError as e:
+        raise IOError(f"overwrite_file failed: {e}")
+
+
+def create_folder(parent_id, name):
+    """
+    Create a new folder under parent_id.
+    Returns the OneDrive item dict for the new folder.
+    Raises FileExistsError if a folder with that name already exists.
+    Raises IOError on other failures.
+    """
+    url = f"{_GRAPH}/items/{parent_id}/children"
+    payload = {
+        "name": name,
+        "folder": {},
+        "@microsoft.graph.conflictBehavior": "fail",
+    }
+    try:
+        return post_json(url, payload)
+    except GraphAPIError as e:
+        if e.status_code == 409:
+            raise FileExistsError(f"'{name}' already exists")
+        raise IOError(f"create_folder failed: {e}")
+
+
+def delete_remote_item(item_id):
+    """
+    Permanently delete an item from OneDrive by ID.
+    Raises IOError on failure.
+    """
+    url = f"{_GRAPH}/items/{item_id}"
+    try:
+        graph_delete(url)
+    except GraphAPIError as e:
+        if e.status_code == 404:
+            return  # already gone — treat as success
+        raise IOError(f"delete_remote_item failed: {e}")
+
+
+def move_rename_item(item_id, new_name=None, new_parent_id=None):
+    """
+    Rename and/or move an existing item.
+    Returns the updated OneDrive item dict.
+    Raises IOError on failure.
+    """
+    url = f"{_GRAPH}/items/{item_id}"
+    payload = {}
+    if new_name:
+        payload["name"] = new_name
+    if new_parent_id:
+        payload["parentReference"] = {"id": new_parent_id}
+    try:
+        return patch_json(url, payload)
+    except GraphAPIError as e:
+        raise IOError(f"move_rename_item failed: {e}")
