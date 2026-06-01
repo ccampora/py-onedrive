@@ -7,8 +7,8 @@ A two-way OneDrive client for Linux built on FUSE. OneDrive is mounted as a virt
 - **Read**: on-demand download — files are fetched only when opened, not on directory browse
 - **Write**: create, edit, delete, and rename files and folders — changes are uploaded to OneDrive on close
 - File managers and thumbnail renderers are blocked from triggering downloads (detected by process name)
-- Incremental metadata sync via the OneDrive delta API — only changes are fetched
-- Background metadata polling keeps the directory tree up to date
+- Editor temp files (vim swap, Office lock files, `.tmp`) are silently redirected to `/tmp` and never uploaded
+- Remote changes appear within ~30 seconds via background delta polling
 - Auto-unmount on process exit — no zombie mounts requiring a reboot
 - OAuth2 authentication with automatic token refresh
 - OneDrive Personal only
@@ -20,23 +20,6 @@ A two-way OneDrive client for Linux built on FUSE. OneDrive is mounted as a virt
 
 ```bash
 sudo apt install fuse3 libfuse3-dev   # Debian/Ubuntu/Pop!_OS
-```
-
-There is no need for further configuration. The default location to sync is `$HOME/onedrive`. Make sure that folder exists.
-
-To use include/exclude functionality, create `$HOME/.py-onedrive/.py-onedrive-folders` and include or exclude folders as needed. By default, only files in the root directory are included.
-
-Format example:
-```
-{
-    "include": [
-                { "path": ":/Documents" }
-        ],
-    "exclude": [
-        { "path": ":/Pictures" },
-        { "path": ":/Others/01" }
-    ]
-}
 ```
 
 ## Installation
@@ -61,22 +44,37 @@ Paste the full URL or just the `code` value into the console. Tokens are saved t
 
 ## Usage
 
+### Start / restart
+
+```bash
+./start.sh
+```
+
+`start.sh` handles the full lifecycle: kills any existing mount process, cleans up stale FUSE transport endpoints, creates the mountpoint if needed, then launches `mount.py` and waits to confirm it mounted successfully.
+
+Extra flags are passed through to `mount.py`:
+
+```bash
+./start.sh --debug
+./start.sh --poll-interval 60
+```
+
+### Manual start
+
 ```bash
 source .venv/bin/activate
 python mount.py
 ```
 
-OneDrive is mounted at `~/Onedrive`. All files and folders appear immediately — no content is downloaded until you open a file.
-
 ```
 Options:
   --mountpoint DIR    Mount point (default: ~/Onedrive)
-  --poll-interval N   Seconds between metadata syncs (default: 300)
+  --poll-interval N   Seconds between metadata syncs (default: 30)
   --max-downloads N   Max concurrent file downloads (default: 4)
   --debug             Verbose logging and FUSE debug mode
 ```
 
-To unmount:
+### Unmount
 
 ```bash
 fusermount3 -u ~/Onedrive
@@ -104,6 +102,18 @@ Changes made inside `~/Onedrive` are synced back to OneDrive:
 | Rename / move | Updated on OneDrive immediately via a single API call |
 
 New files and folders appear in directory listings immediately after creation — no need to refresh.
+
+### Temp file handling
+
+Editor temp files are intercepted at `create()` time and redirected entirely to `/tmp`. They are invisible in directory listings and never reach OneDrive. Filtered patterns:
+
+- Vim: `.*.swp`, `.*.swx`, numeric write-probe files (e.g. `4913`)
+- Generic: `*.tmp`, files ending with `~`
+- Office: `~$*` lock files, `.~lock.*` LibreOffice locks
+
+### Remote changes
+
+The background poller calls the OneDrive delta API every 30 seconds. When changes are detected, the local metadata index is updated and the affected directory inodes are invalidated so `ls` reflects the change immediately on the next call.
 
 ### Running as a systemd service
 
