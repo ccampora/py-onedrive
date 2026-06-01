@@ -1,0 +1,42 @@
+# OneDrive Files On-Demand — systemd user service
+#
+# Install as a user service (no root required):
+#   mkdir -p ~/.config/systemd/user/
+#   cp onedrive.service ~/.config/systemd/user/
+#   # Edit the ExecStart path below to match your installation
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now onedrive.service
+#
+# Check status / logs:
+#   systemctl --user status onedrive
+#   journalctl --user -u onedrive -f
+#
+# Manual unmount:
+#   fusermount3 -u ~/onedrive
+#   # or: systemctl --user stop onedrive
+
+[Unit]
+Description=OneDrive Files On-Demand
+Documentation=https://github.com/ccampora/py-onedrive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# ── Edit these two paths to match your installation ──────────────────────────
+ExecStart=%h/repos/py-onedrive/.venv/bin/python %h/repos/py-onedrive/mount.py
+# ExecStart=... --poll-interval 120 --debug
+# ─────────────────────────────────────────────────────────────────────────────
+
+ExecStop=/usr/bin/fusermount3 -u %h/onedrive
+
+# Restart automatically on crash (but not on clean exit / manual stop)
+Restart=on-failure
+RestartSec=10
+
+# Give the process time to unmount cleanly on stop
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
