@@ -565,8 +565,12 @@ class OneDriveFUSE(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         item_id = item["id"]
-        # Skip the OneDrive DELETE for temp files that were never uploaded
-        if not _SKIP_UPLOAD.search(name):
+        # Only skip the OneDrive DELETE if the file was never actually uploaded
+        # (provisional ID). Files with a real OneDrive ID must be deleted even
+        # if they match the temp-file pattern (e.g. swap files uploaded before
+        # the filter was in place).
+        is_provisional = item_id.startswith("__pending__")
+        if not is_provisional:
             try:
                 await trio.to_thread.run_sync(lambda: delete_remote_item(item_id))
             except IOError as e:
