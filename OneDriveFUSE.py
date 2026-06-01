@@ -25,6 +25,7 @@ class _WriteHandle:
     tmp_path: str           # temp file buffering writes before upload
     item_id: str | None     # None for newly created files
     parent_id: str
+    parent_inode: int       # used to invalidate the dir listing after upload
     name: str
     inode: int              # provisional or real inode
     size: int = 0           # current byte count (for getattr during write)
@@ -90,15 +91,18 @@ def _item_to_attrs(inode, item):
     attrs.st_ino = inode
     attrs.st_uid = os.getuid()
     attrs.st_gid = os.getgid()
-    attrs.attr_timeout = 30.0
-    attrs.entry_timeout = 30.0
 
     is_folder = "folder" in item
     if is_folder:
+        # Directories: never cache so ls always reflects the real index.
+        attrs.attr_timeout = 0.0
+        attrs.entry_timeout = 0.0
         attrs.st_mode = stat.S_IFDIR | 0o755
         attrs.st_size = 0
         attrs.st_nlink = 2
     else:
+        attrs.attr_timeout = 30.0
+        attrs.entry_timeout = 30.0
         attrs.st_mode = stat.S_IFREG | 0o644
         attrs.st_size = item.get("size", 0)
         attrs.st_nlink = 1
@@ -129,8 +133,8 @@ def _root_attrs():
     attrs.st_mode = stat.S_IFDIR | 0o755
     attrs.st_size = 0
     attrs.st_nlink = 2
-    attrs.attr_timeout = 30.0
-    attrs.entry_timeout = 30.0
+    attrs.attr_timeout = 0.0
+    attrs.entry_timeout = 0.0
     now_ns = int(time.time() * 1e9)
     attrs.st_atime_ns = now_ns
     attrs.st_mtime_ns = now_ns
@@ -260,7 +264,9 @@ class OneDriveFUSE(pyfuse3.Operations):
         is_write = access in (os.O_WRONLY, os.O_RDWR)
 
         if is_write:
-            return await self._open_for_write(inode, item_id, item, flags)
+            parent_id = item.get("parentReference", {}).get("id", "")
+            parent_inode = ROOT_INODE if parent_id == self._index.get_root_id() else self._index.get_inode(parent_id)
+            return await self._open_for_write(inode, item_id, item, flags, parent_inode)
 
         # Read-only path: ensure file is cached
         etag = item.get("eTag", "")
@@ -275,7 +281,7 @@ class OneDriveFUSE(pyfuse3.Operations):
 
         return pyfuse3.FileInfo(fh=inode)
 
-    async def _open_for_write(self, inode, item_id, item, flags):
+    async def _open_for_write(self, inode, item_id, item, flags, parent_inode):
         """Set up a write handle for an existing file opened with write flags."""
         tmp = tempfile.NamedTemporaryFile(delete=False, prefix="onedrive-write-")
         tmp_path = tmp.name
@@ -299,8 +305,8 @@ class OneDriveFUSE(pyfuse3.Operations):
         parent_id = item.get("parentReference", {}).get("id", "")
         self._write_handles[fh] = _WriteHandle(
             tmp_path=tmp_path, item_id=item_id,
-            parent_id=parent_id, name=item["name"],
-            inode=inode, size=size,
+            parent_id=parent_id, parent_inode=parent_inode,
+            name=item["name"], inode=inode, size=size,
         )
         logger.debug(f"Opened '{item['name']}' for writing (fh={fh}, truncate={truncate})")
         return pyfuse3.FileInfo(fh=fh)
@@ -404,6 +410,12 @@ class OneDriveFUSE(pyfuse3.Operations):
         logger.info(f"[upload] '{handle.name}' ({handle.size} bytes)")
         try:
             await trio.to_thread.run_sync(lambda: self._upload(handle))
+            # Force the kernel to discard its cached directory listing so that
+            # the new/updated file shows up immediately in ls and the file manager.
+            try:
+                pyfuse3.invalidate_inode(handle.parent_inode, attr_only=False)
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"[upload] failed for '{handle.name}': {e}")
         finally:
@@ -421,6 +433,8 @@ class OneDriveFUSE(pyfuse3.Operations):
             item = overwrite_file(handle.item_id, content)
         else:
             item = upload_new_file(handle.parent_id, handle.name, content)
+            # Remove the provisional placeholder so the real item takes its place
+            self._index.delete(f"__pending__{handle.name}__{handle.parent_id}")
         self._index.upsert(item)
         # Update the content cache so subsequent reads are local
         etag = item.get("eTag", "")
@@ -461,8 +475,8 @@ class OneDriveFUSE(pyfuse3.Operations):
         self._next_write_fh += 1
         self._write_handles[fh] = _WriteHandle(
             tmp_path=tmp.name, item_id=None,
-            parent_id=parent_id, name=name,
-            inode=inode, size=0,
+            parent_id=parent_id, parent_inode=parent_inode,
+            name=name, inode=inode, size=0,
         )
         logger.debug(f"create '{name}' in parent {parent_id} (fh={fh})")
         return pyfuse3.FileInfo(fh=fh), attrs
@@ -485,6 +499,10 @@ class OneDriveFUSE(pyfuse3.Operations):
 
         self._index.upsert(item)
         inode = self._index.get_inode(item["id"])
+        try:
+            pyfuse3.invalidate_inode(parent_inode, attr_only=False)
+        except Exception:
+            pass
         logger.info(f"mkdir '{name}' → {item['id']}")
         return _item_to_attrs(inode, item)
 
@@ -508,10 +526,11 @@ class OneDriveFUSE(pyfuse3.Operations):
         inode = self._index.get_inode(item_id)
         self._index.delete(item_id)
         self._cache.invalidate(item_id)
-        try:
-            pyfuse3.invalidate_inode(inode, attr_only=False)
-        except Exception:
-            pass
+        for inv_inode in (inode, parent_inode):
+            try:
+                pyfuse3.invalidate_inode(inv_inode, attr_only=False)
+            except Exception:
+                pass
         logger.info(f"unlink '{name}' ({item_id})")
 
     async def rmdir(self, parent_inode, name, ctx):
@@ -540,10 +559,11 @@ class OneDriveFUSE(pyfuse3.Operations):
 
         inode = self._index.get_inode(item_id)
         self._index.delete(item_id)
-        try:
-            pyfuse3.invalidate_inode(inode, attr_only=False)
-        except Exception:
-            pass
+        for inv_inode in (inode, parent_inode):
+            try:
+                pyfuse3.invalidate_inode(inv_inode, attr_only=False)
+            except Exception:
+                pass
         logger.info(f"rmdir '{name}' ({item_id})")
 
     async def rename(self, parent_inode_old, name_old, parent_inode_new, name_new, flags, ctx):
@@ -572,6 +592,11 @@ class OneDriveFUSE(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.EIO)
 
         self._index.upsert(updated)
+        for inv_inode in {parent_inode_old, parent_inode_new}:
+            try:
+                pyfuse3.invalidate_inode(inv_inode, attr_only=False)
+            except Exception:
+                pass
         logger.info(f"rename '{name_old}' → '{name_new}' (parent changed: {new_parent is not None})")
 
     async def setattr(self, inode, attr, fields, fh, ctx):

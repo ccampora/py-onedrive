@@ -104,20 +104,22 @@ def _do_token_refresh():
         raise GraphAPIError(401, f"Token refresh failed: {e}")
 
 
-def _write(method, url, timeout=DEFAULT_TIMEOUT, **kwargs):
+def _write(method, url, timeout=DEFAULT_TIMEOUT, extra_headers=None, **kwargs):
     """
     Authenticated PUT / POST / PATCH / DELETE helper.
 
     Retries on 401 (token refresh once) and 429 (rate limit).
     Returns the requests.Response on success (2xx).
     Raises GraphAPIError on failure.
+
+    extra_headers: additional headers to merge with the auth token (never
+    pass headers= inside **kwargs — use this parameter instead).
     """
     token_refreshed = False
     rate_limit_retries = 0
-    extra_headers = kwargs.pop("headers", {})
 
     while True:
-        headers = {**get_bearer_auth_header(), **extra_headers}
+        headers = {**get_bearer_auth_header(), **(extra_headers or {})}
         try:
             r = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
         except requests.exceptions.Timeout:
@@ -149,7 +151,7 @@ def _write(method, url, timeout=DEFAULT_TIMEOUT, **kwargs):
 def put_bytes(url, data, timeout=120):
     """Upload raw bytes via PUT. Returns the response JSON (item metadata)."""
     r = _write("PUT", url, timeout=timeout, data=data,
-                headers={"Content-Type": "application/octet-stream"})
+                extra_headers={"Content-Type": "application/octet-stream"})
     return r.json() if r.content else {}
 
 
