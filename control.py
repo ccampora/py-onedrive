@@ -128,15 +128,25 @@ class ControlServer:
 
     async def run(self):
         """Main trio task. Cleans up the socket file on exit."""
+        import socket as _socket
         _remove_socket()
         try:
-            async with await trio.open_unix_listener(CONTROL_SOCKET) as listener:
-                logger.info(f"Control socket: {CONTROL_SOCKET}")
-                async with trio.open_nursery() as nursery:
-                    nursery.start_soon(self._broadcaster)
-                    nursery.start_soon(listener.serve, self._handle_client)
+            sock = trio.socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            await sock.bind(CONTROL_SOCKET)
+            sock.listen(8)
+            listener = trio.SocketListener(sock)
+            logger.info(f"Control socket: {CONTROL_SOCKET}")
+            async with trio.open_nursery() as nursery:
+                nursery.start_soon(self._broadcaster)
+                nursery.start_soon(self._accept_loop, listener, nursery)
         finally:
             _remove_socket()
+
+    async def _accept_loop(self, listener: trio.SocketListener, nursery):
+        """Accept incoming connections and spawn a handler task for each."""
+        while True:
+            stream = await listener.accept()
+            nursery.start_soon(self._handle_client, stream)
 
     # ------------------------------------------------------------------
     # Internal
@@ -146,8 +156,8 @@ class ControlServer:
         """Non-blocking: queue a status broadcast to all clients."""
         try:
             self._send_channel.send_nowait(self.status.to_json())
-        except trio.WouldBlock:
-            pass  # channel full — drop; clients will get next update
+        except (trio.WouldBlock, trio.BrokenResourceError, trio.ClosedResourceError):
+            pass  # channel full or closed — drop silently
 
     async def _broadcaster(self):
         """Read from the memory channel and fan-out to every connected client."""
@@ -198,7 +208,11 @@ class ControlServer:
         action = msg.get("action", "")
 
         if action == "status":
-            await _send(stream, json.loads(self.status.to_json()))
+            resp = json.loads(self.status.to_json())
+            resp["type"] = "response"
+            resp["action"] = "status"
+            resp["ok"] = True
+            await _send(stream, resp)
 
         elif action == "sync_now":
             if self.on_sync_now:

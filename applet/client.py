@@ -35,10 +35,12 @@ def connect() -> socket.socket:
 
 
 def send_cmd(sock: socket.socket, action: str) -> dict:
+    # Drain the initial status push the server sends on every new connection,
+    # then send our command and wait for the matching response.
+    buf = b""
+    buf = _drain_initial_push(sock, buf)
     msg = json.dumps({"type": "cmd", "action": action}) + "\n"
     sock.sendall(msg.encode())
-    # Read lines until we get the response for our command
-    buf = b""
     while True:
         chunk = sock.recv(4096)
         if not chunk:
@@ -46,13 +48,34 @@ def send_cmd(sock: socket.socket, action: str) -> dict:
         buf += chunk
         while b"\n" in buf:
             line, buf = buf.split(b"\n", 1)
-            obj = json.loads(line.strip())
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
             if obj.get("type") == "response" and obj.get("action") == action:
                 return obj
-            # status pushes arrive before the response — print them
-            if obj.get("type") == "status":
-                print_status(obj)
     return {}
+
+
+def _drain_initial_push(sock: socket.socket, buf: bytes) -> bytes:
+    """Read the status line the server sends immediately on connect."""
+    sock.setblocking(False)
+    import select
+    while True:
+        ready, _, _ = select.select([sock], [], [], 0.5)
+        if not ready:
+            break
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        buf += chunk
+        if b"\n" in buf:
+            break
+    sock.setblocking(True)
+    # Consume the first complete line (the initial status push) and discard it
+    if b"\n" in buf:
+        _, buf = buf.split(b"\n", 1)
+    return buf
 
 
 def print_status(obj: dict):
@@ -111,7 +134,7 @@ def main():
     elif action in ("status", "sync_now", "pause", "resume"):
         resp = send_cmd(sock, action)
         if action == "status":
-            pass  # status was already printed by send_cmd
+            print_status(resp)
         else:
             ok = resp.get("ok", False)
             err = resp.get("error", "")
