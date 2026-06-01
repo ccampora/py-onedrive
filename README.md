@@ -22,6 +22,23 @@ A two-way OneDrive client for Linux built on FUSE. OneDrive is mounted as a virt
 sudo apt install fuse3 libfuse3-dev   # Debian/Ubuntu/Pop!_OS
 ```
 
+There is no need for further configuration. The default location to sync is `$HOME/onedrive`. Make sure that folder exists.
+
+To use include/exclude functionality, create `$HOME/.py-onedrive/.py-onedrive-folders` and include or exclude folders as needed. By default, only files in the root directory are included.
+
+Format example:
+```
+{
+    "include": [
+                { "path": ":/Documents" }
+        ],
+    "exclude": [
+        { "path": ":/Pictures" },
+        { "path": ":/Others/01" }
+    ]
+}
+```
+
 ## Installation
 
 ```bash
