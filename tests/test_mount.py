@@ -6,8 +6,10 @@ from unittest.mock import patch, MagicMock, call
 import pytest
 import pyfuse3
 
+import os
 from mount import parse_args, setup_logging, build_fuse_options, main
-from Globals import ONEDRIVE_ROOT
+
+_DEFAULT_MOUNTPOINT = os.path.expanduser("~/Onedrive")
 
 
 # ---------------------------------------------------------------------------
@@ -16,8 +18,8 @@ from Globals import ONEDRIVE_ROOT
 
 def test_parse_args_defaults():
     args = parse_args([])
-    assert args.mountpoint == ONEDRIVE_ROOT
-    assert args.poll_interval == 300
+    assert args.mountpoint == _DEFAULT_MOUNTPOINT
+    assert args.poll_interval == 30
     assert args.debug is False
 
 

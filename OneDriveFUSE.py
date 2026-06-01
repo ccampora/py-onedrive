@@ -1,6 +1,7 @@
 import dataclasses
 import errno
 import os
+import re
 import stat
 import tempfile
 import time
@@ -17,6 +18,18 @@ from Operations import (
     create_folder, delete_remote_item, move_rename_item,
 )
 from Globals import LOGGER as logger
+
+# Temp/swap files that should never be uploaded to OneDrive.
+_SKIP_UPLOAD = re.compile(
+    r'\.sw[a-z]$'      # vim swap: .swp .swx .swo .swn …
+    r'|~$'             # editor backups ending with ~
+    r'|\.tmp$'         # generic temp files
+    r'|^~\$'           # Office lock files: ~$document.docx
+    r'|^\.~lock\.'     # LibreOffice lock files: .~lock.doc#
+    r'|\.kate-swp$'    # Kate editor swap
+    r'|^\d+$',         # vim write-permission probe (e.g. 4913)
+    re.IGNORECASE,
+)
 
 
 @dataclasses.dataclass
@@ -407,15 +420,18 @@ class OneDriveFUSE(pyfuse3.Operations):
         if handle is None:
             return  # read-only handle — nothing to do
 
-        logger.info(f"[upload] '{handle.name}' ({handle.size} bytes)")
+        is_temp = bool(_SKIP_UPLOAD.search(handle.name))
+        if not is_temp:
+            logger.info(f"[upload] '{handle.name}' ({handle.size} bytes)")
         try:
             await trio.to_thread.run_sync(lambda: self._upload(handle))
-            # Force the kernel to discard its cached directory listing so that
-            # the new/updated file shows up immediately in ls and the file manager.
-            try:
-                pyfuse3.invalidate_inode(handle.parent_inode, attr_only=False)
-            except Exception:
-                pass
+            # Invalidate the parent dir so ls reflects the new file immediately.
+            # Skip for temp files — they were never in the index.
+            if not is_temp:
+                try:
+                    pyfuse3.invalidate_inode(handle.parent_inode, attr_only=False)
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"[upload] failed for '{handle.name}': {e}")
         finally:
@@ -427,6 +443,12 @@ class OneDriveFUSE(pyfuse3.Operations):
 
     def _upload(self, handle: _WriteHandle):
         """Blocking: read temp file and upload to OneDrive. Runs in a thread."""
+        if _SKIP_UPLOAD.search(handle.name):
+            logger.debug(f"[upload] skipping temp file '{handle.name}'")
+            if not handle.item_id:
+                self._index.delete(f"__pending__{handle.name}__{handle.parent_id}")
+            return
+
         with open(handle.tmp_path, "rb") as f:
             content = f.read()
         if handle.item_id:
@@ -454,7 +476,36 @@ class OneDriveFUSE(pyfuse3.Operations):
         tmp = tempfile.NamedTemporaryFile(delete=False, prefix="onedrive-write-")
         tmp.close()
 
-        inode = self._index.get_inode(f"__pending__{name}__{parent_id}")
+        is_temp = bool(_SKIP_UPLOAD.search(name))
+
+        if is_temp:
+            # Temp/swap files: local-only. Use the fh value as the inode so
+            # getattr works, but never add them to the metadata index — they
+            # won't appear in ls and won't be uploaded.
+            fh = self._next_write_fh
+            self._next_write_fh += 1
+            inode = fh
+        else:
+            # Regular file: add a provisional index entry so readdir shows it
+            # immediately (before the upload completes).
+            provisional_id = f"__pending__{name}__{parent_id}"
+            now = datetime.now(timezone.utc).isoformat()
+            provisional_item = {
+                "id": provisional_id,
+                "name": name,
+                "size": 0,
+                "file": {},
+                "parentReference": {"id": parent_id},
+                "fileSystemInfo": {
+                    "lastModifiedDateTime": now,
+                    "createdDateTime": now,
+                },
+            }
+            self._index.upsert(provisional_item)
+            inode = self._index.get_inode(provisional_id)
+            fh = self._next_write_fh
+            self._next_write_fh += 1
+
         now_ns = int(time.time() * 1e9)
         attrs = pyfuse3.EntryAttributes()
         attrs.st_ino = inode
@@ -471,14 +522,12 @@ class OneDriveFUSE(pyfuse3.Operations):
         attrs.st_birthtime_ns = now_ns
         self._pending_attrs[inode] = attrs
 
-        fh = self._next_write_fh
-        self._next_write_fh += 1
         self._write_handles[fh] = _WriteHandle(
             tmp_path=tmp.name, item_id=None,
             parent_id=parent_id, parent_inode=parent_inode,
             name=name, inode=inode, size=0,
         )
-        logger.debug(f"create '{name}' in parent {parent_id} (fh={fh})")
+        logger.debug(f"create '{name}' (temp={is_temp}) fh={fh}")
         return pyfuse3.FileInfo(fh=fh), attrs
 
     async def mkdir(self, parent_inode, name, mode, ctx):
@@ -517,11 +566,17 @@ class OneDriveFUSE(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         item_id = item["id"]
-        try:
-            await trio.to_thread.run_sync(lambda: delete_remote_item(item_id))
-        except IOError as e:
-            logger.error(f"unlink '{name}': {e}")
-            raise pyfuse3.FUSEError(errno.EIO)
+        # Only skip the OneDrive DELETE if the file was never actually uploaded
+        # (provisional ID). Files with a real OneDrive ID must be deleted even
+        # if they match the temp-file pattern (e.g. swap files uploaded before
+        # the filter was in place).
+        is_provisional = item_id.startswith("__pending__")
+        if not is_provisional:
+            try:
+                await trio.to_thread.run_sync(lambda: delete_remote_item(item_id))
+            except IOError as e:
+                logger.error(f"unlink '{name}': {e}")
+                raise pyfuse3.FUSEError(errno.EIO)
 
         inode = self._index.get_inode(item_id)
         self._index.delete(item_id)
@@ -630,7 +685,7 @@ class OneDriveFUSE(pyfuse3.Operations):
             await trio.sleep(interval)
             await trio.to_thread.run_sync(self._index.flush_inode_mapping)
 
-    async def metadata_poller(self, interval=300):
+    async def metadata_poller(self, interval=30):
         """
         Trio task: sleep `interval` seconds, sync OneDrive metadata, invalidate
         stale kernel inodes and cache entries. Designed to run alongside
@@ -664,15 +719,31 @@ class OneDriveFUSE(pyfuse3.Operations):
             return
 
         logger.info(f"Poller: {len(changed_ids)} item(s) changed — invalidating")
+        invalidated_parents: set[int] = set()
         for item_id in changed_ids:
             inode = self._index.get_inode(item_id)
             try:
-                # attr_only=False also drops the kernel page cache for this inode
                 pyfuse3.invalidate_inode(inode, attr_only=False)
             except Exception:
-                # FS may be in the process of unmounting, or inode already gone
                 pass
             self._cache.invalidate(item_id)
+
+            # Also invalidate the parent directory so ls reflects the change
+            # immediately without waiting for the kernel dentry cache to expire.
+            item = self._index.get_item(item_id)
+            if item:
+                parent_id = item.get("parentReference", {}).get("id")
+                if parent_id:
+                    parent_inode = (
+                        ROOT_INODE if parent_id == self._index.get_root_id()
+                        else self._index.get_inode(parent_id)
+                    )
+                    if parent_inode not in invalidated_parents:
+                        invalidated_parents.add(parent_inode)
+                        try:
+                            pyfuse3.invalidate_inode(parent_inode, attr_only=False)
+                        except Exception:
+                            pass
 
     # ------------------------------------------------------------------
     # Internal helpers

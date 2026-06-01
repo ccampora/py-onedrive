@@ -12,6 +12,12 @@ from CacheManager import CacheManager
 from OneDriveFUSE import OneDriveFUSE, _parse_datetime_ns, _item_to_attrs, _root_attrs
 
 
+def _fake_ctx(pid=1):
+    ctx = MagicMock()
+    ctx.pid = pid
+    return ctx
+
+
 # ---------------------------------------------------------------------------
 # Test data
 # ---------------------------------------------------------------------------
@@ -140,7 +146,7 @@ def test_item_to_attrs_file(index):
     assert stat.S_ISREG(attrs.st_mode)
     assert attrs.st_size == 1024
     assert attrs.st_nlink == 1
-    assert not (attrs.st_mode & stat.S_IWUSR)  # read-only
+    assert attrs.st_mode & stat.S_IWUSR  # writable
 
 
 def test_item_to_attrs_folder(index):
@@ -349,22 +355,23 @@ def test_releasedir_does_not_raise(fuse):
 
 def test_open_valid_file_returns_file_info(fuse, index):
     inode = index.get_inode(FILE_ITEM["id"])
-    fi = trio.run(fuse.open, inode, os.O_RDONLY, None)
+    with patch("OneDriveFUSE.download_file", return_value=FILE_CONTENT):
+        fi = trio.run(fuse.open, inode, os.O_RDONLY, _fake_ctx())
     assert fi.fh == inode
 
 
-def test_open_write_flag_raises_eacces(fuse, index):
+def test_open_write_flag_opens_write_handle(fuse, index):
     inode = index.get_inode(FILE_ITEM["id"])
-    with pytest.raises(pyfuse3.FUSEError) as exc_info:
-        trio.run(fuse.open, inode, os.O_WRONLY, None)
-    assert exc_info.value.errno == errno.EACCES
+    with patch("OneDriveFUSE.download_file", return_value=b""):
+        fi = trio.run(fuse.open, inode, os.O_WRONLY, _fake_ctx())
+    assert fi.fh in fuse._write_handles
 
 
-def test_open_rdwr_flag_raises_eacces(fuse, index):
+def test_open_rdwr_flag_opens_write_handle(fuse, index):
     inode = index.get_inode(FILE_ITEM["id"])
-    with pytest.raises(pyfuse3.FUSEError) as exc_info:
-        trio.run(fuse.open, inode, os.O_RDWR, None)
-    assert exc_info.value.errno == errno.EACCES
+    with patch("OneDriveFUSE.download_file", return_value=b""):
+        fi = trio.run(fuse.open, inode, os.O_RDWR, _fake_ctx())
+    assert fi.fh in fuse._write_handles
 
 
 def test_open_unknown_inode_raises_enoent(fuse):
@@ -388,11 +395,12 @@ def test_open_folder_inode_raises_enoent(fuse, index):
 FILE_CONTENT = b"Hello from OneDrive! This is the file content."
 
 
-def test_read_cache_miss_downloads_and_returns_content(fuse, index):
+def test_read_cache_miss_raises_eio(fuse, index):
+    """read() on an uncached file raises EIO — open() is responsible for downloading."""
     inode = index.get_inode(FILE_ITEM["id"])
-    with patch("OneDriveFUSE.download_file", return_value=FILE_CONTENT):
-        result = trio.run(fuse.read, inode, 0, len(FILE_CONTENT))
-    assert result == FILE_CONTENT
+    with pytest.raises(pyfuse3.FUSEError) as exc_info:
+        trio.run(fuse.read, inode, 0, 100)
+    assert exc_info.value.errno == errno.EIO
 
 
 def test_read_cache_hit_serves_without_download(fuse, index, cache):
@@ -407,39 +415,23 @@ def test_read_cache_hit_serves_without_download(fuse, index, cache):
     assert result == FILE_CONTENT
 
 
-def test_read_respects_offset_and_length(fuse, index):
+def test_read_respects_offset_and_length(fuse, index, cache):
+    """read() slices from the cached file at the given offset and length."""
     inode = index.get_inode(FILE_ITEM["id"])
     content = b"ABCDEFGHIJ"
-    with patch("OneDriveFUSE.download_file", return_value=content):
-        result = trio.run(fuse.read, inode, 2, 4)
+    cache.put(FILE_ITEM["id"], FILE_ITEM["eTag"], content)
+    result = trio.run(fuse.read, inode, 2, 4)
     assert result == b"CDEF"
 
 
-def test_read_second_call_uses_cache(fuse, index):
+def test_read_second_call_uses_cache(fuse, index, cache):
+    """Two consecutive reads both hit the local cache (no double download)."""
     inode = index.get_inode(FILE_ITEM["id"])
-    with patch("OneDriveFUSE.download_file", return_value=FILE_CONTENT) as mock_dl:
+    cache.put(FILE_ITEM["id"], FILE_ITEM["eTag"], FILE_CONTENT)
+    with patch("OneDriveFUSE.download_file") as mock_dl:
         trio.run(fuse.read, inode, 0, len(FILE_CONTENT))
         trio.run(fuse.read, inode, 0, len(FILE_CONTENT))
-    # Downloaded only once; second read served from cache
-    assert mock_dl.call_count == 1
-
-
-def test_read_download_failure_raises_eio(fuse, index):
-    inode = index.get_inode(FILE_ITEM["id"])
-    with patch("OneDriveFUSE.download_file", side_effect=IOError("HTTP 503")):
-        with pytest.raises(pyfuse3.FUSEError) as exc_info:
-            trio.run(fuse.read, inode, 0, 100)
-    assert exc_info.value.errno == errno.EIO
-
-
-def test_read_404_removes_item_from_index_and_raises_enoent(fuse, index):
-    inode = index.get_inode(FILE_ITEM["id"])
-    with patch("OneDriveFUSE.download_file", side_effect=FileNotFoundError("404")):
-        with patch.object(pyfuse3, "invalidate_inode"):
-            with pytest.raises(pyfuse3.FUSEError) as exc_info:
-                trio.run(fuse.read, inode, 0, 100)
-    assert exc_info.value.errno == errno.ENOENT
-    assert index.get_item(FILE_ITEM["id"]) is None
+    mock_dl.assert_not_called()
 
 
 def test_read_unknown_fh_raises_ebadf(fuse):
@@ -448,18 +440,24 @@ def test_read_unknown_fh_raises_ebadf(fuse):
     assert exc_info.value.errno == errno.EBADF
 
 
-def test_read_stale_etag_redownloads(fuse, index, cache):
-    """If the cached eTag differs from the index, re-download the file."""
+def test_open_download_failure_raises_eio(fuse, index):
+    """open() raises EIO when the download fails."""
     inode = index.get_inode(FILE_ITEM["id"])
-    # Seed cache with an old eTag
-    cache.put(FILE_ITEM["id"], '"old-etag"', b"stale content")
+    with patch("OneDriveFUSE.download_file", side_effect=IOError("HTTP 503")):
+        with pytest.raises(pyfuse3.FUSEError) as exc_info:
+            trio.run(fuse.open, inode, os.O_RDONLY, _fake_ctx())
+    assert exc_info.value.errno == errno.EIO
 
-    new_content = b"fresh content"
-    with patch("OneDriveFUSE.download_file", return_value=new_content) as mock_dl:
-        result = trio.run(fuse.read, inode, 0, len(new_content))
 
-    mock_dl.assert_called_once()
-    assert result == new_content
+def test_open_404_removes_item_from_index_and_raises_enoent(fuse, index):
+    """open() removes the item from the index and raises ENOENT on 404."""
+    inode = index.get_inode(FILE_ITEM["id"])
+    with patch("OneDriveFUSE.download_file", side_effect=FileNotFoundError("404")):
+        with patch.object(pyfuse3, "invalidate_inode"):
+            with pytest.raises(pyfuse3.FUSEError) as exc_info:
+                trio.run(fuse.open, inode, os.O_RDONLY, _fake_ctx())
+    assert exc_info.value.errno == errno.ENOENT
+    assert index.get_item(FILE_ITEM["id"]) is None
 
 
 # ---------------------------------------------------------------------------
