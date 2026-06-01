@@ -31,6 +31,15 @@ _SKIP_UPLOAD = re.compile(
     re.IGNORECASE,
 )
 
+# Directory names that should never be created on OneDrive. Returning EPERM
+# from mkdir() causes the file manager to fall back to the system trash
+# (~/.local/share/Trash/) instead of creating trash infrastructure on the cloud.
+_SKIP_MKDIR = re.compile(
+    r'^\.Trash(-\d+)?$'    # freedesktop trash: .Trash, .Trash-1000, etc.
+    r'|^\$RECYCLE\.BIN$',  # Windows recycle bin (seen on shared drives)
+    re.IGNORECASE,
+)
+
 
 @dataclasses.dataclass
 class _WriteHandle:
@@ -536,6 +545,13 @@ class OneDriveFUSE(pyfuse3.Operations):
         if parent_id is None:
             raise pyfuse3.FUSEError(errno.ENOENT)
 
+        # Reject trash directories so the file manager falls back to the
+        # system trash (~/.local/share/Trash/) instead of syncing trash
+        # infrastructure to OneDrive.
+        if _SKIP_MKDIR.match(name):
+            logger.debug(f"mkdir blocked for trash dir '{name}' — use system trash")
+            raise pyfuse3.FUSEError(errno.EPERM)
+
         try:
             item = await trio.to_thread.run_sync(
                 lambda: create_folder(parent_id, name)
@@ -643,8 +659,28 @@ class OneDriveFUSE(pyfuse3.Operations):
                 lambda: move_rename_item(item_id, new_name=new_name, new_parent_id=new_parent)
             )
         except IOError as e:
-            logger.error(f"rename '{name_old}' → '{name_new}': {e}")
-            raise pyfuse3.FUSEError(errno.EIO)
+            # 409 nameAlreadyExists: POSIX rename() must atomically replace an
+            # empty directory at the destination. Delete it first, then retry.
+            if "409" in str(e):
+                dest_item = self._index.lookup(parent_id_new, name_new)
+                if dest_item is not None:
+                    try:
+                        await trio.to_thread.run_sync(
+                            lambda: delete_remote_item(dest_item["id"])
+                        )
+                        self._index.delete(dest_item["id"])
+                        updated = await trio.to_thread.run_sync(
+                            lambda: move_rename_item(item_id, new_name=new_name, new_parent_id=new_parent)
+                        )
+                    except IOError as e2:
+                        logger.error(f"rename '{name_old}' → '{name_new}' (retry): {e2}")
+                        raise pyfuse3.FUSEError(errno.EIO)
+                else:
+                    logger.error(f"rename '{name_old}' → '{name_new}': {e}")
+                    raise pyfuse3.FUSEError(errno.EIO)
+            else:
+                logger.error(f"rename '{name_old}' → '{name_new}': {e}")
+                raise pyfuse3.FUSEError(errno.EIO)
 
         self._index.upsert(updated)
         for inv_inode in {parent_inode_old, parent_inode_new}:
