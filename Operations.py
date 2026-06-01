@@ -9,9 +9,12 @@ from Config import (
     save_deltalink_to_db,
     save_item_remoteinfo_to_db,
 )
-from Item import get_etag_from_local, is_excluded
+from Item import get_etag_from_local, is_excluded, is_included, should_download_simple
+from GraphAPI import get as graph_get, put_bytes, post_json, patch_json, delete_item as graph_delete, GraphAPIError
 from Globals import ONEDRIVE_DB_FOLDER, ONEDRIVE_ROOT
 from Globals import LOGGER as logger
+
+DELTA_URL = "https://graph.microsoft.com/v1.0/me/drive/root/delta"
 
 
 def get_drive_information():
@@ -27,6 +30,11 @@ def get_drive_information():
 
 
 def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
+
+    # Check if the onedrive root folder exists, if not create it
+    if not os.path.exists(ONEDRIVE_ROOT):
+        logger.info(f"Creating onedrive root folder at {ONEDRIVE_ROOT}")
+        os.makedirs(ONEDRIVE_ROOT, exist_ok=True)
 
     delta_link = get_deltalink_from_db()
     if next_link is not None:
@@ -53,21 +61,12 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
     for item in items_list:
         logger.debug("Processing item content: %s", pretty_json(item))
 
-        if (
-            "parentReference" in item
-            and "path" in item["parentReference"]
-            and is_excluded(f'{item["parentReference"]["path"]}/{item["name"]}')
-        ):
-            logger.debug(
-                f'Excluding {item["parentReference"]["path"].split(":")[1]}/{item["name"]}'
-            )
+        if (item["name"] == "root"):
             continue
         
-        # If root item then exclude
-        if "root" in item:
-            logger.debug("Skiping root item")
+        if not should_download_simple(item):
             continue
-
+         
         if "folder" in item:
             if "parentReference" in item and "path" in item["parentReference"]:
 
@@ -95,7 +94,9 @@ def sync_onedrive_to_disk(onedrive_root_folder, local_path, next_link=None):
                 sync_onedrive_to_disk_file(
                     item["name"],
                     item["parentReference"]["path"].split(":")[1],
-                    item["@microsoft.graph.downloadUrl"],
+                    #item["@microsoft.graph.downloadUrl"],
+                    #item["webUrl"],
+                    f'https://graph.microsoft.com/v1.0/me/drive/items/{item["id"]}/content',
                 )
 
         if "deleted" in item:
@@ -145,17 +146,29 @@ def sync_onedrive_to_disk_file(file_name, path, url):
     logger.info(f"Getting file {file_name} from {path}")
     file_full_path = f"{ONEDRIVE_ROOT}{path}/{file_name}"
 
-    auth_header = get_bearer_auth_header()
-    r = requests.get(url, headers=auth_header)
+    # Ensure parent directories exist
+    parent_dir = os.path.dirname(file_full_path)
+    os.makedirs(parent_dir, exist_ok=True)
 
-    with open(file_full_path, "wb") as f:
-        f.write(r.content)
+    try:
+        auth_header = get_bearer_auth_header()
+        r = requests.get(url, headers=auth_header)
 
-    """
-    Returns the item DB content as json
-    """
+        # Check if the download was successful
+        if r.status_code == 200:
+            with open(file_full_path, "wb") as f:
+                f.write(r.content)
+            logger.info(f"Successfully downloaded: {file_full_path}")
+        else:
+            logger.error(f"Failed to download file {file_name}. Status: {r.status_code}")
+            
+    except Exception as e:
+        logger.error(f"Error downloading file {file_name}: {str(e)}")
 
 
+"""
+Returns the item DB content as json
+"""
 def get_item_db_content(id):
     item_db_file = f"{ONEDRIVE_DB_FOLDER}/{id}"
 
@@ -163,7 +176,7 @@ def get_item_db_content(id):
         with open(item_db_file, "r") as file:
             return json.load(file)
     else:
-        logger.warn(f"Db file for {id} not found! Cant delete file")
+        logger.warning(f"Db file for {id} not found! Cant delete file")
         return ""
 
     """
@@ -187,7 +200,7 @@ def delete_item_from_disk(item_id):
     item_db_content = get_item_db_content(id=item_id)
 
     if item_db_content == "":
-        logger.warn(f"Cannot delete item with id {item_id}")
+        logger.warning(f"Cannot delete item with id {item_id}")
         return
 
     item_folder = get_folder_from_path(item_db_content["parentReference"]["path"])
@@ -209,6 +222,173 @@ def delete_item_from_disk(item_id):
 
         delete_item_db_entry(id=item_id)
     else:
-        logger.warn(f"The item {item_id} with path {item_path_on_disk} does not exist")
+        logger.warning(f"The item {item_id} with path {item_path_on_disk} does not exist")
 
     return True
+
+
+# ---------------------------------------------------------------------------
+# On-demand FUSE: metadata sync and content fetch
+# ---------------------------------------------------------------------------
+
+def sync_metadata(index, next_link=None):
+    """
+    Fetch changes from the OneDrive delta API and update the MetadataIndex.
+    Does NOT download any file content.
+
+    On the first call (empty delta link) this does a full metadata scan.
+    Subsequent calls only fetch changes since the last run.
+
+    Returns a list of item IDs that were added, changed, or deleted —
+    used by the FUSE background poller to invalidate stale inodes.
+    """
+    delta_link = get_deltalink_from_db()
+
+    if next_link is not None:
+        url = next_link
+    elif delta_link:
+        url = delta_link
+    else:
+        url = DELTA_URL
+
+    logger.debug(f"sync_metadata: GET {url}")
+
+    try:
+        r = graph_get(url)
+    except GraphAPIError as e:
+        if e.status_code == 410 and next_link is None:
+            # Delta token expired — clear it and start a full resync
+            logger.warning("Delta link expired (410 resyncRequired) — starting full resync")
+            save_deltalink_to_db(deltaToken="")
+            return sync_metadata(index)
+        raise
+    response = r.json()
+
+    items = response.get("value", [])
+    changed_ids = []
+
+    if not items:
+        logger.info("sync_metadata: nothing new")
+
+    for item in items:
+        if item.get("name") == "root":
+            continue
+
+        item_id = item["id"]
+
+        if "deleted" in item:
+            index.delete(item_id)
+            changed_ids.append(item_id)
+        else:
+            index.upsert(item)
+            changed_ids.append(item_id)
+
+    if "@odata.nextLink" in response:
+        changed_ids += sync_metadata(index, next_link=response["@odata.nextLink"])
+
+    if "@odata.deltaLink" in response:
+        save_deltalink_to_db(deltaToken=response["@odata.deltaLink"])
+
+    return changed_ids
+
+
+def download_file(item_id):
+    """
+    Fetch file content from the Graph API and return the raw bytes.
+    Raises IOError on failure (after all retries are exhausted).
+    """
+    url = f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"
+    try:
+        r = graph_get(url)
+        return r.content
+    except GraphAPIError as e:
+        logger.error(f"download_file: failed for {item_id} — {e}")
+        if e.status_code == 404:
+            raise FileNotFoundError(str(e))
+        raise IOError(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Write operations (upload, create folder, delete, rename/move)
+# ---------------------------------------------------------------------------
+
+_GRAPH = "https://graph.microsoft.com/v1.0/me/drive"
+
+
+def upload_new_file(parent_id, name, content):
+    """
+    Upload content as a new file under parent_id.
+    Returns the OneDrive item dict from the API response.
+    Raises IOError on failure.
+    """
+    url = f"{_GRAPH}/items/{parent_id}:/{name}:/content"
+    try:
+        return put_bytes(url, content)
+    except GraphAPIError as e:
+        raise IOError(f"upload_new_file failed: {e}")
+
+
+def overwrite_file(item_id, content):
+    """
+    Replace the content of an existing file by item ID.
+    Returns the updated OneDrive item dict.
+    Raises IOError on failure.
+    """
+    url = f"{_GRAPH}/items/{item_id}/content"
+    try:
+        return put_bytes(url, content)
+    except GraphAPIError as e:
+        raise IOError(f"overwrite_file failed: {e}")
+
+
+def create_folder(parent_id, name):
+    """
+    Create a new folder under parent_id.
+    Returns the OneDrive item dict for the new folder.
+    Raises FileExistsError if a folder with that name already exists.
+    Raises IOError on other failures.
+    """
+    url = f"{_GRAPH}/items/{parent_id}/children"
+    payload = {
+        "name": name,
+        "folder": {},
+        "@microsoft.graph.conflictBehavior": "fail",
+    }
+    try:
+        return post_json(url, payload)
+    except GraphAPIError as e:
+        if e.status_code == 409:
+            raise FileExistsError(f"'{name}' already exists")
+        raise IOError(f"create_folder failed: {e}")
+
+
+def delete_remote_item(item_id):
+    """
+    Permanently delete an item from OneDrive by ID.
+    Raises IOError on failure.
+    """
+    url = f"{_GRAPH}/items/{item_id}"
+    try:
+        graph_delete(url)
+    except GraphAPIError as e:
+        if e.status_code == 404:
+            return  # already gone — treat as success
+        raise IOError(f"delete_remote_item failed: {e}")
+
+
+def move_rename_item(item_id, new_name=None, new_parent_id=None):
+    """
+    Rename and/or move an existing item.
+    Returns the updated OneDrive item dict.
+    Raises IOError on failure.
+    """
+    url = f"{_GRAPH}/items/{item_id}"
+    payload = {}
+    if new_name:
+        payload["name"] = new_name
+    if new_parent_id:
+        payload["parentReference"] = {"id": new_parent_id}
+    try:
+        return patch_json(url, payload)
+    except GraphAPIError as e:
+        raise IOError(f"move_rename_item failed: {e}")
