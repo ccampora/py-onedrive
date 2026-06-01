@@ -685,7 +685,7 @@ class OneDriveFUSE(pyfuse3.Operations):
             await trio.sleep(interval)
             await trio.to_thread.run_sync(self._index.flush_inode_mapping)
 
-    async def metadata_poller(self, interval=300):
+    async def metadata_poller(self, interval=30):
         """
         Trio task: sleep `interval` seconds, sync OneDrive metadata, invalidate
         stale kernel inodes and cache entries. Designed to run alongside
@@ -719,15 +719,31 @@ class OneDriveFUSE(pyfuse3.Operations):
             return
 
         logger.info(f"Poller: {len(changed_ids)} item(s) changed — invalidating")
+        invalidated_parents: set[int] = set()
         for item_id in changed_ids:
             inode = self._index.get_inode(item_id)
             try:
-                # attr_only=False also drops the kernel page cache for this inode
                 pyfuse3.invalidate_inode(inode, attr_only=False)
             except Exception:
-                # FS may be in the process of unmounting, or inode already gone
                 pass
             self._cache.invalidate(item_id)
+
+            # Also invalidate the parent directory so ls reflects the change
+            # immediately without waiting for the kernel dentry cache to expire.
+            item = self._index.get_item(item_id)
+            if item:
+                parent_id = item.get("parentReference", {}).get("id")
+                if parent_id:
+                    parent_inode = (
+                        ROOT_INODE if parent_id == self._index.get_root_id()
+                        else self._index.get_inode(parent_id)
+                    )
+                    if parent_inode not in invalidated_parents:
+                        invalidated_parents.add(parent_inode)
+                        try:
+                            pyfuse3.invalidate_inode(parent_inode, attr_only=False)
+                        except Exception:
+                            pass
 
     # ------------------------------------------------------------------
     # Internal helpers

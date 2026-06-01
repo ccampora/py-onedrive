@@ -256,4 +256,4 @@ def test_poller_uses_default_interval(fuse):
 
     trio.run(run)
     assert len(sleep_calls) >= 1
-    assert sleep_calls[0] == 300
+    assert sleep_calls[0] == 30

@@ -19,7 +19,7 @@ _DEFAULT_MOUNTPOINT = os.path.expanduser("~/Onedrive")
 def test_parse_args_defaults():
     args = parse_args([])
     assert args.mountpoint == _DEFAULT_MOUNTPOINT
-    assert args.poll_interval == 300
+    assert args.poll_interval == 30
     assert args.debug is False
 
 

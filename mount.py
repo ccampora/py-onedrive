@@ -6,7 +6,7 @@ Mounts OneDrive as a virtual filesystem where file content is fetched
 transparently from the Graph API only when a file is first opened.
 
 Usage:
-    python mount.py [--mountpoint ~/onedrive] [--poll-interval 300] [--debug]
+    python mount.py [--mountpoint ~/onedrive] [--poll-interval 30] [--debug]
 
 Unmount:
     fusermount3 -u ~/onedrive
@@ -48,7 +48,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--poll-interval",
         type=int,
-        default=300,
+        default=30,
         metavar="SECONDS",
         help="How often (in seconds) to sync metadata changes from OneDrive",
     )
