@@ -7,4 +7,5 @@ ONEDRIVE_DB_FOLDER = f'{CONFIG_FOLDER}/db'
 DELTALINK_FILE = f'{CONFIG_FOLDER}/.py-onedrive-deltalink'
 INODE_FILE = f'{CONFIG_FOLDER}/.py-onedrive-inodes'
 CACHE_FOLDER = f'{CONFIG_FOLDER}/cache'
+CONTROL_SOCKET = f'{CONFIG_FOLDER}/control.sock'
 LOGGER = logging.getLogger()

@@ -24,6 +24,7 @@ import trio
 from Authentication import authenticate
 from CacheManager import CacheManager
 from Config import create_pyonedrive_config_folder, init_onedrive_database
+from control import ControlServer
 from Globals import CACHE_FOLDER, LOGGER as logger
 from MetadataIndex import MetadataIndex
 from OneDriveFUSE import OneDriveFUSE
@@ -103,13 +104,13 @@ def build_fuse_options(debug=False):
 # Trio entry point
 # ---------------------------------------------------------------------------
 
-async def _run_fuse(fs, poll_interval):
+async def _run_fuse(fs, ctrl, poll_interval):
     """
-    Run pyfuse3.main and the metadata poller as concurrent trio tasks.
-    When either task exits (e.g. on unmount or Ctrl+C), the nursery
-    cancels the other.
+    Run pyfuse3.main and supporting trio tasks concurrently.
+    When any task exits (unmount, Ctrl+C) the nursery cancels the rest.
     """
     async with trio.open_nursery() as nursery:
+        nursery.start_soon(ctrl.run)
         nursery.start_soon(pyfuse3.main)
         nursery.start_soon(fs.metadata_poller, poll_interval)
         nursery.start_soon(fs.inode_flusher)
@@ -158,10 +159,13 @@ def main(argv=None):
     os.makedirs(mountpoint, exist_ok=True)
 
     cache = CacheManager(CACHE_FOLDER)
-    fs = OneDriveFUSE(index, cache, max_concurrent_downloads=args.max_downloads)
+    ctrl = ControlServer()
+    fs = OneDriveFUSE(index, cache, max_concurrent_downloads=args.max_downloads,
+                      control=ctrl)
     fuse_options = build_fuse_options(args.debug)
 
     pyfuse3.init(fs, mountpoint, fuse_options)
+    ctrl.set_mounted(True)
     logger.info(f"Mounted at: {mountpoint}")
     logger.info(
         f"Poll interval: {args.poll_interval}s  |  Max concurrent downloads: {args.max_downloads}"
@@ -170,10 +174,11 @@ def main(argv=None):
 
     # 6. Run until unmounted or interrupted.
     try:
-        trio.run(_run_fuse, fs, args.poll_interval)
+        trio.run(_run_fuse, fs, ctrl, args.poll_interval)
     except KeyboardInterrupt:
         pass
     finally:
+        ctrl.set_mounted(False)
         index.flush_inode_mapping()
         pyfuse3.close(unmount=True)
         logger.info(f"Unmounted {mountpoint}")

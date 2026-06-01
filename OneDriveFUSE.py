@@ -190,11 +190,13 @@ class OneDriveFUSE(pyfuse3.Operations):
     Step 5 — file read: open, read, release (not yet implemented).
     """
 
-    def __init__(self, index: MetadataIndex, cache: CacheManager = None, max_concurrent_downloads: int = 4):
+    def __init__(self, index: MetadataIndex, cache: CacheManager = None,
+                 max_concurrent_downloads: int = 4, control=None):
         super().__init__()
         self._index = index
         self._cache = cache or CacheManager()
         self._download_limiter = trio.CapacityLimiter(max_concurrent_downloads)
+        self._ctrl = control          # ControlServer instance, or None
         # item_id -> trio.Event set when the download completes (or fails)
         self._in_flight: dict[str, trio.Event] = {}
         # Write handles: fh -> _WriteHandle (fh values start at 2^31 to avoid
@@ -432,8 +434,13 @@ class OneDriveFUSE(pyfuse3.Operations):
         is_temp = bool(_SKIP_UPLOAD.search(handle.name))
         if not is_temp:
             logger.info(f"[upload] '{handle.name}' ({handle.size} bytes)")
+            if self._ctrl:
+                self._ctrl.inc_pending()
         try:
             await trio.to_thread.run_sync(lambda: self._upload(handle))
+            if not is_temp and self._ctrl:
+                self._ctrl.dec_pending()
+                self._ctrl.clear_error()
             # Invalidate the parent dir so ls reflects the new file immediately.
             # Skip for temp files — they were never in the index.
             if not is_temp:
@@ -443,6 +450,9 @@ class OneDriveFUSE(pyfuse3.Operations):
                     pass
         except Exception as e:
             logger.error(f"[upload] failed for '{handle.name}': {e}")
+            if not is_temp and self._ctrl:
+                self._ctrl.dec_pending()
+                self._ctrl.set_error(str(e))
         finally:
             self._pending_attrs.pop(handle.inode, None)
             try:
@@ -746,9 +756,22 @@ class OneDriveFUSE(pyfuse3.Operations):
         Note: deleted item IDs are still in the inode mapping after
         index.delete() — intentional, since the kernel may hold open handles.
         """
-        changed_ids = await trio.to_thread.run_sync(
-            lambda: sync_metadata(self._index)
-        )
+        if self._ctrl:
+            self._ctrl.set_state("syncing")
+        try:
+            changed_ids = await trio.to_thread.run_sync(
+                lambda: sync_metadata(self._index)
+            )
+        except Exception:
+            if self._ctrl:
+                self._ctrl.set_state("idle")
+            raise
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if self._ctrl:
+            self._ctrl.set_last_sync(now)
+            self._ctrl.set_state("idle")
 
         if not changed_ids:
             logger.debug("Poller: nothing changed")
