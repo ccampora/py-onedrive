@@ -419,15 +419,18 @@ class OneDriveFUSE(pyfuse3.Operations):
         if handle is None:
             return  # read-only handle — nothing to do
 
-        logger.info(f"[upload] '{handle.name}' ({handle.size} bytes)")
+        is_temp = bool(_SKIP_UPLOAD.search(handle.name))
+        if not is_temp:
+            logger.info(f"[upload] '{handle.name}' ({handle.size} bytes)")
         try:
             await trio.to_thread.run_sync(lambda: self._upload(handle))
-            # Force the kernel to discard its cached directory listing so that
-            # the new/updated file shows up immediately in ls and the file manager.
-            try:
-                pyfuse3.invalidate_inode(handle.parent_inode, attr_only=False)
-            except Exception:
-                pass
+            # Invalidate the parent dir so ls reflects the new file immediately.
+            # Skip for temp files — they were never in the index.
+            if not is_temp:
+                try:
+                    pyfuse3.invalidate_inode(handle.parent_inode, attr_only=False)
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"[upload] failed for '{handle.name}': {e}")
         finally:
@@ -472,7 +475,36 @@ class OneDriveFUSE(pyfuse3.Operations):
         tmp = tempfile.NamedTemporaryFile(delete=False, prefix="onedrive-write-")
         tmp.close()
 
-        inode = self._index.get_inode(f"__pending__{name}__{parent_id}")
+        is_temp = bool(_SKIP_UPLOAD.search(name))
+
+        if is_temp:
+            # Temp/swap files: local-only. Use the fh value as the inode so
+            # getattr works, but never add them to the metadata index — they
+            # won't appear in ls and won't be uploaded.
+            fh = self._next_write_fh
+            self._next_write_fh += 1
+            inode = fh
+        else:
+            # Regular file: add a provisional index entry so readdir shows it
+            # immediately (before the upload completes).
+            provisional_id = f"__pending__{name}__{parent_id}"
+            now = datetime.now(timezone.utc).isoformat()
+            provisional_item = {
+                "id": provisional_id,
+                "name": name,
+                "size": 0,
+                "file": {},
+                "parentReference": {"id": parent_id},
+                "fileSystemInfo": {
+                    "lastModifiedDateTime": now,
+                    "createdDateTime": now,
+                },
+            }
+            self._index.upsert(provisional_item)
+            inode = self._index.get_inode(provisional_id)
+            fh = self._next_write_fh
+            self._next_write_fh += 1
+
         now_ns = int(time.time() * 1e9)
         attrs = pyfuse3.EntryAttributes()
         attrs.st_ino = inode
@@ -489,14 +521,12 @@ class OneDriveFUSE(pyfuse3.Operations):
         attrs.st_birthtime_ns = now_ns
         self._pending_attrs[inode] = attrs
 
-        fh = self._next_write_fh
-        self._next_write_fh += 1
         self._write_handles[fh] = _WriteHandle(
             tmp_path=tmp.name, item_id=None,
             parent_id=parent_id, parent_inode=parent_inode,
             name=name, inode=inode, size=0,
         )
-        logger.debug(f"create '{name}' in parent {parent_id} (fh={fh})")
+        logger.debug(f"create '{name}' (temp={is_temp}) fh={fh}")
         return pyfuse3.FileInfo(fh=fh), attrs
 
     async def mkdir(self, parent_inode, name, mode, ctx):
