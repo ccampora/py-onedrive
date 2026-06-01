@@ -1,20 +1,15 @@
 # py-onedrive
 
-A Python client for OneDrive on Linux, with two modes:
-
-- **Eager sync** (`Onedrive.py`) — downloads all files to a local folder, stays in sync via cron
-- **Files On-Demand** (`mount.py`) — mounts OneDrive as a virtual FUSE filesystem; files appear instantly from metadata and content is fetched transparently only when a file is opened
+A Files On-Demand OneDrive client for Linux. OneDrive is mounted as a virtual FUSE filesystem — all files and folders appear instantly from local metadata, and content is fetched from OneDrive transparently only when a file is opened.
 
 ## Features
 
 - OAuth2 authentication via Microsoft Graph API
-- Incremental sync using the OneDrive delta API (only changes are fetched)
-- Deletion sync — items deleted in OneDrive are removed locally
-- Files On-Demand FUSE mount with:
-  - Zero downloads on directory browsing (file managers and thumbnail renderers are blocked)
-  - On-demand download triggered only when a file is explicitly opened by a user application
-  - Background metadata polling to pick up remote changes
-  - Auto-unmount on process exit (no zombie mounts requiring a reboot)
+- Incremental metadata sync using the OneDrive delta API
+- Zero downloads on directory browsing — file managers and thumbnail renderers are blocked from triggering fetches
+- On-demand download triggered only when a file is explicitly opened by a user application
+- Background metadata polling to keep the directory tree up to date
+- Auto-unmount on process exit (no zombie mounts)
 - OneDrive Personal only
 
 ## Requirements
@@ -83,20 +78,6 @@ systemctl --user enable --now onedrive
 systemctl --user status onedrive
 ```
 
-## Eager sync mode
-
-```bash
-python Onedrive.py
-```
-
-Downloads all OneDrive content to `~/onedrive`. Suitable for running as a cron job:
-
-```bash
-crontab -e
-# add:
-* * * * * /path/to/py-onedrive/.venv/bin/python /path/to/py-onedrive/Onedrive.py >> ~/.py-onedrive/py-onedrive.log 2>&1
-```
-
 ## File layout
 
 | Path | Purpose |
@@ -107,7 +88,6 @@ crontab -e
 | `~/.py-onedrive/db/` | Item metadata cache (one JSON file per item) |
 | `~/.py-onedrive/cache/` | Downloaded file content cache |
 | `~/Onedrive/` | FUSE mount point |
-| `~/onedrive/` | Eager sync destination |
 
 ## Roadmap
 
