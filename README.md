@@ -1,142 +1,118 @@
 # py-onedrive
-A Python client for one-way syncing OneDrive to local disk.
 
-## Supported Features
+A Python client for OneDrive on Linux, with two modes:
 
-* OAuth2 authentication via Microsoft Graph API
-* One-way sync from OneDrive to disk (download only)
-* Incremental sync using OneDrive delta API (only changed files are downloaded)
-* Deletion sync — files/folders deleted in OneDrive are removed from disk
-* Include filter — sync only specific folders
-* Exclude filter — skip specific folders
-* OneDrive Personal only
+- **Eager sync** (`Onedrive.py`) — downloads all files to a local folder, stays in sync via cron
+- **Files On-Demand** (`mount.py`) — mounts OneDrive as a virtual FUSE filesystem; files appear instantly from metadata and content is fetched transparently only when a file is opened
+
+## Features
+
+- OAuth2 authentication via Microsoft Graph API
+- Incremental sync using the OneDrive delta API (only changes are fetched)
+- Deletion sync — items deleted in OneDrive are removed locally
+- Files On-Demand FUSE mount with:
+  - Zero downloads on directory browsing (file managers and thumbnail renderers are blocked)
+  - On-demand download triggered only when a file is explicitly opened by a user application
+  - Background metadata polling to pick up remote changes
+  - Auto-unmount on process exit (no zombie mounts requiring a reboot)
+- OneDrive Personal only
 
 ## Requirements
 
-* Python 3.x
-* A Microsoft account with OneDrive Personal
+- Python 3.10+
+- `fuse3` and `libfuse3-dev` system packages
+- A Microsoft account with OneDrive Personal
+
+```bash
+sudo apt install fuse3 libfuse3-dev   # Debian/Ubuntu/Pop!_OS
+```
 
 ## Installation
 
 ```bash
 git clone https://github.com/ccampora/py-onedrive.git
 cd py-onedrive
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Configuration
+## Authentication
 
-All configuration files are stored in `~/.py-onedrive/`.
-
-### Include / Exclude filters
-
-Create `~/.py-onedrive/.py-onedrive-folders` to control which folders are synced.
-
-**Include filter** — sync only the listed folders (and their contents). If the `include` list is empty, all folders are synced (subject to exclusions).
-
-**Exclude filter** — always skip the listed folders, even if they match an include rule.
-
-Filter paths use the OneDrive path format starting with `:/`:
-
-```json
-{
-    "include": [
-        { "path": ":/Documents" },
-        { "path": ":/Projects" }
-    ],
-    "exclude": [
-        { "path": ":/Pictures" },
-        { "path": ":/Others/01" }
-    ]
-}
-```
-
-If the file does not exist, all folders are synced with no exclusions.
-
-### Sync destination
-
-Files are synced to `~/onedrive` by default. The directory is created automatically on first run.
-
-## Running
-
-From the cloned directory:
-
-```bash
-python Onedrive.py
-```
-
-On the first run, a browser window will open for Microsoft account login. After authorizing, you will be redirected to a URL like:
+Both modes share the same auth flow. On the first run, a browser window opens for Microsoft account login. After authorizing you are redirected to a URL like:
 
 ```
 https://login.microsoftonline.com/common/oauth2/nativeclient?code=M.C544_SN1...
 ```
 
-Paste either the full URL or just the `code` value into the console. Tokens are saved to `~/.py-onedrive/.py-onedrive-secrets` and refreshed automatically on subsequent runs.
+Paste the full URL or just the `code` value into the console. Tokens are saved to `~/.py-onedrive/.py-onedrive-secrets` and refreshed automatically on subsequent runs.
 
-## Running on a schedule (crontab)
+## Files On-Demand (FUSE mount)
 
-Edit your crontab:
+```bash
+python mount.py
+```
+
+OneDrive is mounted at `~/Onedrive` by default. All 50 000+ items appear immediately in directory listings — no content is downloaded until you open a file.
+
+```
+Options:
+  --mountpoint DIR      Mount point (default: ~/Onedrive)
+  --poll-interval N     Seconds between metadata syncs (default: 300)
+  --max-downloads N     Max concurrent downloads (default: 4)
+  --debug               Verbose logging and FUSE debug mode
+```
+
+To unmount:
+
+```bash
+fusermount3 -u ~/Onedrive
+# or Ctrl+C in the terminal where mount.py is running
+```
+
+### How file manager browsing works
+
+Opening `~/Onedrive` in a file manager (Cosmic Files, Nautilus, Thunar, etc.) lists all files from the local metadata index — no network calls, no downloads. File managers and thumbnail renderers that probe file content are detected by process name and blocked with `ENODATA`. Downloads only happen when you open a file with an application (Evince, LibreOffice, etc.).
+
+### Running as a systemd service
+
+```bash
+cp onedrive.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now onedrive
+systemctl --user status onedrive
+```
+
+## Eager sync mode
+
+```bash
+python Onedrive.py
+```
+
+Downloads all OneDrive content to `~/onedrive`. Suitable for running as a cron job:
 
 ```bash
 crontab -e
+# add:
+* * * * * /path/to/py-onedrive/.venv/bin/python /path/to/py-onedrive/Onedrive.py >> ~/.py-onedrive/py-onedrive.log 2>&1
 ```
-
-Add an entry to run every minute:
-
-```
-* * * * * python /path/to/py-onedrive/Onedrive.py >> ~/.py-onedrive/py-onedrive.log 2>&1
-```
-
-## Roadmap
-
-### [P0] On-demand virtual filesystem (Files On-Demand)
-The top priority feature. Instead of eagerly downloading all files, mount a virtual filesystem using **FUSE** (`pyfuse3`) where files appear in directory listings immediately (metadata only) and content is fetched from OneDrive transparently the first time a file is opened — exactly like Windows OneDrive's Files On-Demand.
-
-The current project already has the required building blocks (auth, item metadata DB, Graph API calls). The main work is replacing the eager sync loop in `Operations.py` with a FUSE driver implementing:
-
-- `readdir()` — list directory contents from the Graph API / local metadata cache
-- `getattr()` — return file size and timestamps from the local DB (no download needed)
-- `open()` / `read()` — stream file content from `https://graph.microsoft.com/v1.0/me/drive/items/{id}/content`
-
-Trade-offs vs. the current eager sync mode:
-
-| | Eager sync (current) | FUSE on-demand |
-|---|---|---|
-| Disk usage | Full copy of OneDrive | Only files you actually open |
-| Works offline | Yes | No — requires network on file access |
-| Runs as cron job | Yes | No — process must stay mounted |
-| Complexity | Low | Higher (FUSE driver) |
-
-### Upload / two-way sync
-The client is currently download-only. Local changes (new files, edits, deletions) are not pushed back to OneDrive.
-
-### Configurable sync destination
-The sync folder is hardcoded to `~/onedrive` in `Globals.py`. It should be settable via a config file or a CLI flag so users are not required to edit source code.
-
-### CLI arguments
-No command-line interface exists. Useful flags would include:
-- `--dry-run` — show what would be downloaded or deleted without making changes
-- `--verbose` / `--debug` — control log level without editing source
-- `--config` — point to a non-default config directory
-
-### Rate limit handling
-The Microsoft Graph API returns HTTP 429 when rate-limited. The client does not currently handle this and will log an error instead of backing off and retrying.
-
-### OneNote sync
-The code detects OneNote packages and creates the corresponding local folder, but the notebook content itself is not downloaded.
-
-### Shared folders
-Only the user's own drive is synced. Folders shared by others (which appear under a different drive root) are not supported.
-
-### Error recovery and retry
-Failed downloads are logged and skipped. A retry mechanism with exponential back-off would make the client more resilient on slow or unstable connections.
 
 ## File layout
 
 | Path | Purpose |
 |------|---------|
-| `~/.py-onedrive/.py-onedrive-secrets` | OAuth2 access and refresh tokens |
-| `~/.py-onedrive/.py-onedrive-folders` | Include / exclude filter config |
-| `~/.py-onedrive/.py-onedrive-deltalink` | Delta sync state (resumes where last run left off) |
-| `~/.py-onedrive/db/` | Local cache of OneDrive item metadata |
-| `~/onedrive/` | Synced files destination |
+| `~/.py-onedrive/.py-onedrive-secrets` | OAuth2 tokens |
+| `~/.py-onedrive/.py-onedrive-deltalink` | Delta sync cursor |
+| `~/.py-onedrive/.py-onedrive-inodes` | Stable inode mapping for FUSE |
+| `~/.py-onedrive/db/` | Item metadata cache (one JSON file per item) |
+| `~/.py-onedrive/cache/` | Downloaded file content cache |
+| `~/Onedrive/` | FUSE mount point |
+| `~/onedrive/` | Eager sync destination |
+
+## Roadmap
+
+- **Upload / two-way sync** — local changes are not pushed back to OneDrive
+- **Shared folders** — only the user's own drive is supported
+- **OneNote** — notebook content is not downloaded
+- **Sparse / streaming reads** — large files are fully downloaded before the first byte is returned; range requests would allow faster first-open
+- **Cache eviction policy** — the local content cache grows unboundedly; LRU eviction would bound disk usage
