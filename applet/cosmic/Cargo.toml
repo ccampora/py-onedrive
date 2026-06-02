@@ -1,0 +1,24 @@
+[package]
+name = "cosmic-onedrive-applet"
+version = "0.1.0"
+edition = "2021"
+description = "COSMIC panel applet for the py-onedrive Files On-Demand client"
+license = "MIT"
+
+[[bin]]
+name = "cosmic-onedrive-applet"
+path = "src/main.rs"
+
+[dependencies]
+# COSMIC UI framework — pin to a specific commit if the build breaks
+libcosmic = { git = "https://github.com/pop-os/libcosmic", features = ["applet"] }
+dirs = "5"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["net", "io-util", "time", "rt-multi-thread", "macros"] }
+
+[profile.release]
+opt-level = "s"  # size-optimised
+lto = true
+strip = true

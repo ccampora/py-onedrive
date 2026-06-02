@@ -1,0 +1,16 @@
+[Unit]
+Description=OneDrive Files On-Demand
+Documentation=https://github.com/ccampora/py-onedrive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/py-onedrive
+ExecStop=/usr/bin/fusermount3 -u %h/OneDrive
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
