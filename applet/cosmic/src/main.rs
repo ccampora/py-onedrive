@@ -2,8 +2,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-// Embedded OneDrive cloud SVG — rendered as the panel icon
+// Embedded OneDrive cloud SVGs — one per visual state
 const CLOUD_SVG: &[u8] = include_bytes!("../assets/onedrive-cloud.svg");
+const CLOUD_OFFLINE_SVG: &[u8] = include_bytes!("../assets/onedrive-cloud-offline.svg");
+const CLOUD_SYNC_SVG: &[u8] = include_bytes!("../assets/onedrive-cloud-sync.svg");
+const CLOUD_PAUSED_SVG: &[u8] = include_bytes!("../assets/onedrive-cloud-paused.svg");
+const CLOUD_ERROR_SVG: &[u8] = include_bytes!("../assets/onedrive-cloud-error.svg");
 
 use cosmic::app::{Core, Task};
 use cosmic::iced::stream;
@@ -322,22 +326,17 @@ impl cosmic::Application for OneDriveApplet {
 
 impl OneDriveApplet {
     fn panel_icon_handle(&self) -> cosmic::widget::icon::Handle {
-        // Use a named system icon for states that have clear standard representations;
-        // fall back to the embedded OneDrive cloud for idle/connected.
-        let named = match &self.status.state {
-            _ if !self.connected => Some("network-offline-symbolic"),
-            State::Uploading => Some("go-up-symbolic"),
-            State::Downloading => Some("go-down-symbolic"),
-            State::Syncing => Some("emblem-synchronizing-symbolic"),
-            State::Paused => Some("media-playback-pause-symbolic"),
-            State::Error => Some("dialog-error-symbolic"),
-            State::Idle => None,
-        };
-        if let Some(name) = named {
-            cosmic::widget::icon::from_name(name).into()
+        let svg = if !self.connected {
+            CLOUD_OFFLINE_SVG
         } else {
-            cosmic::widget::icon::from_svg_bytes(CLOUD_SVG)
-        }
+            match &self.status.state {
+                State::Uploading | State::Downloading | State::Syncing => CLOUD_SYNC_SVG,
+                State::Paused => CLOUD_PAUSED_SVG,
+                State::Error => CLOUD_ERROR_SVG,
+                State::Idle => CLOUD_SVG,
+            }
+        };
+        cosmic::widget::icon::from_svg_bytes(svg)
     }
 
     fn context_items(&self) -> Option<Vec<menu::Tree<Message>>> {

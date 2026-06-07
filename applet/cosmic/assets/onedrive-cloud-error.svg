@@ -1,4 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
   <path fill="#DEDEDE"
     d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+  <g transform="translate(12,14)">
+    <path d="M0,-4.5 L4,3.5 H-4 Z" fill="#FF8F00" stroke="#DEDEDE" stroke-width="0.3"/>
+    <text x="0" y="2.5" text-anchor="middle" font-size="5.5" font-weight="bold" font-family="sans-serif" fill="#FFFFFF">!</text>
+  </g>
 </svg>

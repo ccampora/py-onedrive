@@ -124,6 +124,62 @@ systemctl --user enable --now onedrive
 systemctl --user status onedrive
 ```
 
+## COSMIC Desktop Applet
+
+A native panel applet for the COSMIC desktop that shows sync status, pending files, and provides quick actions (Sync Now, Pause, Resume).
+
+### Building
+
+Requires Rust (stable) and the COSMIC SDK dependencies:
+
+```bash
+cd applet/cosmic
+cargo build --release
+```
+
+### Installing
+
+```bash
+# Install the binary
+cp applet/cosmic/target/release/cosmic-onedrive-applet ~/.local/bin/
+
+# Install the desktop entry so the panel can discover the applet
+cp /usr/share/applications/com.github.ccampora.OneDriveApplet.desktop ~/.local/share/applications/
+```
+
+If you don't already have the desktop entry, create it:
+
+```bash
+mkdir -p ~/.local/share/applications
+cat > ~/.local/share/applications/com.github.ccampora.OneDriveApplet.desktop <<'EOF'
+[Desktop Entry]
+Name=OneDrive Applet
+Comment=OneDrive sync status applet
+Exec=cosmic-onedrive-applet
+Icon=cloud
+Type=Application
+NoDisplay=true
+X-CosmicApplet=true
+Categories=System;
+EOF
+```
+
+### Adding to the panel
+
+Open **Settings → Desktop → Panel → Applets** and add "OneDrive Applet" to the right wing. The panel will manage the applet lifecycle automatically (start on login, restart on crash).
+
+### Icons
+
+The panel icon changes based on connection state:
+
+| State | Icon |
+|-------|------|
+| Connected / idle | Light gray cloud |
+| Syncing / uploading / downloading | Cloud with sync arrows |
+| Paused | Cloud with pause bars |
+| Error | Cloud with warning triangle |
+| Disconnected | Dimmed cloud with red X |
+
 ## File layout
 
 | Path | Purpose |
