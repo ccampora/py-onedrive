@@ -26,7 +26,9 @@ Socket path: ~/.py-onedrive/control.sock  (CONTROL_SOCKET in Globals.py)
 
 import json
 import os
+from collections import deque
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from typing import Literal
 
 import trio
@@ -42,12 +44,20 @@ State = Literal["idle", "uploading", "downloading", "syncing", "paused", "error"
 
 
 @dataclass
+class RecentFile:
+    name: str = ""
+    timestamp: str = ""
+    action: str = ""  # "uploaded" or "downloaded"
+
+
+@dataclass
 class DaemonStatus:
     mounted: bool = False
     state: State = "idle"
     pending: int = 0            # files currently uploading or downloading
     last_sync: str = ""         # ISO-8601 UTC timestamp of last successful poll
     error: str = ""             # last error message, empty when healthy
+    recent_files: list = field(default_factory=list)  # last 5 synced files
 
     def to_json(self) -> str:
         d = asdict(self)
@@ -121,6 +131,15 @@ class ControlServer:
             self.status.state = "idle"
             self.status.error = ""
             self._enqueue_broadcast()
+
+    def record_file_activity(self, filename: str, action: str = "uploaded"):
+        """Record a recently synced file (keeps last 5)."""
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry = RecentFile(name=filename, timestamp=ts, action=action)
+        self.status.recent_files.append(asdict(entry))
+        if len(self.status.recent_files) > 5:
+            self.status.recent_files = self.status.recent_files[-5:]
+        self._enqueue_broadcast()
 
     # ------------------------------------------------------------------
     # Trio entry point

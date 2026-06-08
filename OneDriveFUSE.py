@@ -389,6 +389,8 @@ class OneDriveFUSE(pyfuse3.Operations):
                     await trio.to_thread.run_sync(
                         lambda: self._download_and_cache(item_id, etag)
                     )
+                    if self._ctrl:
+                        self._ctrl.record_file_activity(item['name'], "downloaded")
                 except FileNotFoundError:
                     logger.warning(
                         f"Item '{item['name']}' not found on OneDrive — removing from index"
@@ -441,6 +443,7 @@ class OneDriveFUSE(pyfuse3.Operations):
             if not is_temp and self._ctrl:
                 self._ctrl.dec_pending()
                 self._ctrl.clear_error()
+                self._ctrl.record_file_activity(handle.name, "uploaded")
             # Invalidate the parent dir so ls reflects the new file immediately.
             # Skip for temp files — they were never in the index.
             if not is_temp:

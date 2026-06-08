@@ -54,6 +54,16 @@ impl State {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+struct RecentFile {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    timestamp: String,
+    #[serde(default)]
+    action: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
 struct DaemonStatus {
     #[serde(default)]
     state: State,
@@ -65,6 +75,8 @@ struct DaemonStatus {
     mounted: bool,
     #[serde(default)]
     error: String,
+    #[serde(default)]
+    recent_files: Vec<RecentFile>,
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +412,25 @@ impl OneDriveApplet {
             content = content.push(
                 cosmic::widget::text(format!("⚠  {}", self.status.error)).size(12),
             );
+        }
+
+        // Recent files section
+        if !self.status.recent_files.is_empty() {
+            content = content.push(cosmic::widget::divider::horizontal::default());
+            content = content.push(
+                cosmic::widget::text("Recent activity").size(12),
+            );
+            for rf in self.status.recent_files.iter().rev().take(5) {
+                let icon = if rf.action == "uploaded" { "↑" } else { "↓" };
+                let ts = if rf.timestamp.len() >= 16 {
+                    &rf.timestamp[11..16] // HH:MM
+                } else {
+                    &rf.timestamp
+                };
+                content = content.push(
+                    cosmic::widget::text(format!("{} {} {}", icon, ts, rf.name)).size(11),
+                );
+            }
         }
 
         // Action buttons
