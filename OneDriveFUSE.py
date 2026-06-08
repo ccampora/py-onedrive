@@ -790,6 +790,12 @@ class OneDriveFUSE(pyfuse3.Operations):
                 pass
             self._cache.invalidate(item_id)
 
+            # Record remote changes in recent files
+            if self._ctrl:
+                item = self._index.get_item(item_id)
+                if item and "folder" not in item:
+                    self._ctrl.record_file_activity(item.get("name", item_id), "synced")
+
             # Also invalidate the parent directory so ls reflects the change
             # immediately without waiting for the kernel dentry cache to expire.
             item = self._index.get_item(item_id)
