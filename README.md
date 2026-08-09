@@ -164,7 +164,7 @@ systemctl --user status onedrive
 
 ## COSMIC Desktop Applet
 
-A native panel applet for the COSMIC desktop that shows sync status, pending files, and provides quick actions (Sync Now, Pause, Resume).
+A native panel applet for the COSMIC desktop that shows sync status, pending files, and provides quick actions (Sync Now, Pause, Resume). It talks to the daemon over the control socket (`~/.py-onedrive/control.sock`), so install the daemon first — from source or via the Arch package (see [Installation](#installation) above) — before building the applet.
 
 ### Building
 
