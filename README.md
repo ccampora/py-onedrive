@@ -24,6 +24,8 @@ sudo apt install fuse3 libfuse3-dev   # Debian/Ubuntu/Pop!_OS
 
 ## Installation
 
+### From source
+
 ```bash
 git clone https://github.com/ccampora/py-onedrive.git
 cd py-onedrive
@@ -31,6 +33,42 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+### Arch Linux
+
+All dependencies (`python-trio`, `python-requests`, `python-pyfuse3`, `fuse3`) are in the official `extra` repo.
+
+**One-off install** — build and install directly with `makepkg`:
+
+```bash
+git clone https://github.com/ccampora/py-onedrive.git
+cd py-onedrive/packaging/arch
+makepkg -si
+```
+
+**Repo install (recommended for staying updated)** — publish releases to a local pacman repo so `pacman -Syu` picks up new versions like any other package:
+
+```bash
+# One-time setup: create the repo dir and register it with pacman.
+# It must live outside $HOME — pacman's sandboxed download user (alpm)
+# can't traverse a private home directory to reach a file:// repo under it.
+sudo mkdir -p /srv/pkgrepo && sudo chown "$USER:$USER" /srv/pkgrepo
+
+sudo tee -a /etc/pacman.conf > /dev/null << 'EOF'
+
+[py-onedrive-local]
+SigLevel = Optional TrustAll
+Server = file:///srv/pkgrepo
+EOF
+
+# Build + publish the current release
+bash packaging/arch/build-arch.sh
+
+# Install / update
+sudo pacman -Sy py-onedrive
+```
+
+To pick up a new release, re-run `bash packaging/arch/build-arch.sh X.Y.Z` after `git tag vX.Y.Z && git push --tags`, then `sudo pacman -Syu`.
 
 ## Authentication
 
