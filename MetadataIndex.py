@@ -131,6 +131,31 @@ class MetadataIndex:
         self._deindex_item(item_id)
         self._delete_item_from_db(item_id)
 
+    def rebind(self, old_id, new_item):
+        """
+        Replace an item's id with a new one, preserving its inode.
+
+        Used when a provisional (`__pending__...`) entry is renamed before
+        its upload completes: the id string encodes name/parent and must
+        change, but the inode already handed to the kernel must not.
+        """
+        inode = self._id_to_inode.pop(old_id, None)
+        if inode is not None:
+            self._inode_to_id.pop(inode, None)
+
+        self._deindex_item(old_id)
+        self._delete_item_from_db(old_id)
+
+        new_id = new_item.get("id")
+        if inode is not None:
+            self._id_to_inode[new_id] = inode
+            self._inode_to_id[inode] = new_id
+
+        self._index_item(new_item)
+        self._maybe_update_root(new_item)
+        self._save_item_to_db(new_id, new_item)
+        self._inode_dirty = True
+
     # ------------------------------------------------------------------
     # Private: indexing
     # ------------------------------------------------------------------

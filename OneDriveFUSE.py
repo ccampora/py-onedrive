@@ -51,6 +51,7 @@ class _WriteHandle:
     name: str
     inode: int              # provisional or real inode
     size: int = 0           # current byte count (for getattr during write)
+    provisional_id: str | None = None  # index key while item_id is None
 
 # Processes that probe file content for thumbnails/indexing but should NOT
 # trigger on-demand downloads. Add entries as needed for your desktop env.
@@ -548,6 +549,7 @@ class OneDriveFUSE(pyfuse3.Operations):
             tmp_path=tmp.name, item_id=None,
             parent_id=parent_id, parent_inode=parent_inode,
             name=name, inode=inode, size=0,
+            provisional_id=None if is_temp else provisional_id,
         )
         logger.debug(f"create '{name}' (temp={is_temp}) fh={fh}")
         return pyfuse3.FileInfo(fh=fh), attrs
@@ -664,6 +666,41 @@ class OneDriveFUSE(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOENT)
 
         item_id = item["id"]
+
+        if item_id.startswith("__pending__"):
+            # Upload hasn't happened yet (create()/write() only touch the
+            # local temp file) — there is nothing on the server to rename.
+            # Rewrite the provisional index entry and the still-open write
+            # handle in place so the eventual upload lands under the new
+            # name/location, and skip the Graph API call entirely.
+            new_provisional_id = f"__pending__{name_new}__{parent_id_new}"
+            new_item = dict(item)
+            new_item["id"] = new_provisional_id
+            new_item["name"] = name_new
+            new_item["parentReference"] = {"id": parent_id_new}
+            self._index.rebind(item_id, new_item)
+
+            handle = next(
+                (h for h in self._write_handles.values()
+                 if h.provisional_id == item_id),
+                None,
+            )
+            if handle is not None:
+                handle.name = name_new
+                handle.parent_id = parent_id_new
+                handle.parent_inode = parent_inode_new
+                handle.provisional_id = new_provisional_id
+
+            for inv_inode in {parent_inode_old, parent_inode_new}:
+                try:
+                    pyfuse3.invalidate_inode(inv_inode, attr_only=False)
+                except Exception:
+                    pass
+            logger.info(
+                f"rename '{name_old}' → '{name_new}' (pending upload, local-only)"
+            )
+            return
+
         new_name = name_new if name_new != name_old else None
         new_parent = parent_id_new if parent_id_new != parent_id_old else None
 
