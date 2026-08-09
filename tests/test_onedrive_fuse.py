@@ -467,3 +467,83 @@ def test_open_404_removes_item_from_index_and_raises_enoent(fuse, index):
 def test_release_does_not_raise(fuse, index):
     inode = index.get_inode(FILE_ITEM["id"])
     trio.run(fuse.release, inode)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# rename (provisional / not-yet-uploaded items)
+#
+# Regression coverage for: rename() racing release()'s background upload.
+# create() only writes a local temp file and a provisional "__pending__..."
+# index entry; the real Graph upload happens later in release(). Renaming
+# in between must not hit the Graph API with a synthetic id.
+# ---------------------------------------------------------------------------
+
+def test_rename_pending_item_is_local_only_no_graph_call(fuse):
+    fi, _ = trio.run(
+        fuse.create, ROOT_INODE, b"project.json.tmp-999888777", 0o644,
+        os.O_WRONLY, _fake_ctx(),
+    )
+
+    with patch("OneDriveFUSE.move_rename_item") as mock_move:
+        trio.run(
+            fuse.rename, ROOT_INODE, b"project.json.tmp-999888777",
+            ROOT_INODE, b"project.json", 0, _fake_ctx(),
+        )
+
+    mock_move.assert_not_called()
+
+    item = fuse._index.lookup(ROOT_ID, "project.json")
+    assert item is not None
+    assert item["id"].startswith("__pending__")
+    assert fuse._index.lookup(ROOT_ID, "project.json.tmp-999888777") is None
+
+    handle = fuse._write_handles[fi.fh]
+    assert handle.name == "project.json"
+    assert handle.parent_id == ROOT_ID
+
+
+def test_rename_pending_item_preserves_inode(fuse):
+    """The kernel already knows the inode returned by create() — renaming
+    a pending item must not hand out a different one."""
+    fi, attrs = trio.run(
+        fuse.create, ROOT_INODE, b"draft.txt.tmp-1", 0o644,
+        os.O_WRONLY, _fake_ctx(),
+    )
+    original_inode = attrs.st_ino
+
+    with patch("OneDriveFUSE.move_rename_item"):
+        trio.run(
+            fuse.rename, ROOT_INODE, b"draft.txt.tmp-1",
+            ROOT_INODE, b"draft.txt", 0, _fake_ctx(),
+        )
+
+    item = fuse._index.lookup(ROOT_ID, "draft.txt")
+    assert fuse._index.get_inode(item["id"]) == original_inode
+
+
+def test_rename_pending_item_then_upload_uses_new_name(fuse):
+    """After a rename-before-upload, release()'s eventual upload must use
+    the new name/parent, not the one captured at create() time."""
+    fi, _ = trio.run(
+        fuse.create, ROOT_INODE, b"project.json.tmp-999888777", 0o644,
+        os.O_WRONLY, _fake_ctx(),
+    )
+    trio.run(fuse.write, fi.fh, 0, b'{"schema":1}')
+
+    with patch("OneDriveFUSE.move_rename_item"):
+        trio.run(
+            fuse.rename, ROOT_INODE, b"project.json.tmp-999888777",
+            ROOT_INODE, b"project.json", 0, _fake_ctx(),
+        )
+
+    uploaded_item = {
+        **FILE_ITEM, "id": "DRIVE!newfile", "name": "project.json",
+        "parentReference": {"id": ROOT_ID},
+    }
+    with patch("OneDriveFUSE.upload_new_file", return_value=uploaded_item) as mock_upload:
+        trio.run(fuse.release, fi.fh)
+
+    mock_upload.assert_called_once()
+    args, _ = mock_upload.call_args
+    assert args[1] == "project.json"
+    assert fuse._index.lookup(ROOT_ID, "project.json")["id"] == "DRIVE!newfile"
