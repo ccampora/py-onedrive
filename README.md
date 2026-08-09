@@ -234,4 +234,36 @@ The panel icon changes based on connection state:
 - **Shared folders** — only the user's own drive is currently supported
 - **Large file uploads** — files over ~150 MB should use the Graph API upload session for reliability
 - **Cache eviction** — the content cache grows unboundedly; an LRU policy would bound disk usage
+
+## Changelog
+
+Full release history: [GitHub Releases](https://github.com/ccampora/py-onedrive/releases).
+
+### v0.1.3 — 2026-08-09
+
+- **Fixed:** `rename()` on a just-created file could return `EIO`, or
+  succeed but leave the upload under the wrong name, if the background
+  upload triggered by `close()` hadn't finished yet. This broke the
+  common crash-safe save pattern — write a temp file, then `rename()` it
+  over the real target — used by many editors and apps. Verified against
+  a live mount.
+- **Fixed:** `.deb` release packaging — the GitHub Actions release
+  pipeline had been silently failing since v0.1.2 due to an upstream
+  `pyfuse3` build dependency conflict; no `.deb` had actually been
+  published for v0.1.2.
+
+### v0.1.2 — 2026-08-09
+
+- **Added:** Arch Linux packaging (`PKGBUILD` + local pacman repo build
+  script) — see [Arch Linux](#arch-linux) under Installation.
+- Superseded same-day by v0.1.3: this release's first attempt at the
+  rename-during-upload fix turned out to be incomplete under real-world
+  timing.
+
+### v0.1.1 — 2026-06-02
+
+- **Added:** `.deb` packaging.
+- **Added:** COSMIC desktop applet — recent activity tracking (last 5
+  synced files with timestamps), remote-change tracking, cloud-based SVG
+  status icons.
 - **Conflict resolution** — no handling when the same file is modified both locally and remotely
