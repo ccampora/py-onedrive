@@ -1,6 +1,7 @@
 import errno
 import os
 import stat
+import threading
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -547,3 +548,76 @@ def test_rename_pending_item_then_upload_uses_new_name(fuse):
     args, _ = mock_upload.call_args
     assert args[1] == "project.json"
     assert fuse._index.lookup(ROOT_ID, "project.json")["id"] == "DRIVE!newfile"
+
+
+def test_rename_races_in_flight_release_upload(fuse):
+    """
+    Regression test for the real-world ordering: close() triggers release(),
+    whose background upload thread can call upload_new_file() (evaluating
+    handle.name/parent_id as call arguments) within microseconds — almost
+    always before a client's follow-up rename() reaches us. Mutating the
+    handle after that point can't retroactively change an already-issued
+    call, so rename() must detect it lost the race (handle.upload_started)
+    and fall back to: wait for the upload to finish, then issue a normal
+    Graph rename of the resulting real item — never silently leave the
+    upload under its stale name.
+    """
+    fi, _ = trio.run(
+        fuse.create, ROOT_INODE, b"project.json.tmp-999888777", 0o644,
+        os.O_WRONLY, _fake_ctx(),
+    )
+    trio.run(fuse.write, fi.fh, 0, b'{"schema":1}')
+
+    entered_upload = threading.Event()
+    allow_upload_to_finish = threading.Event()
+    captured = {}
+
+    def fake_upload_new_file(parent_id, name, content):
+        entered_upload.set()
+        allow_upload_to_finish.wait(timeout=5)
+        captured["parent_id"] = parent_id
+        captured["name"] = name
+        return {
+            **FILE_ITEM, "id": "DRIVE!newfile", "name": name,
+            "parentReference": {"id": parent_id},
+        }
+
+    def fake_move_rename_item(item_id, new_name=None, new_parent_id=None):
+        return {
+            **FILE_ITEM, "id": item_id,
+            "name": new_name or "project.json.tmp-999888777",
+            "parentReference": {"id": new_parent_id or ROOT_ID},
+        }
+
+    async def scenario():
+        with (
+            patch("OneDriveFUSE.upload_new_file", side_effect=fake_upload_new_file),
+            patch("OneDriveFUSE.move_rename_item", side_effect=fake_move_rename_item) as mock_move,
+        ):
+            async with trio.open_nursery() as nursery:
+                nursery.start_soon(fuse.release, fi.fh)
+                await trio.to_thread.run_sync(entered_upload.wait)
+                # release()'s upload thread has already snapshotted
+                # name/parent_id and is blocked mid-upload — exactly the
+                # window where the race is lost.
+                handle = fuse._write_handles[fi.fh]
+                assert handle.upload_started is True
+
+                nursery.start_soon(
+                    fuse.rename, ROOT_INODE, b"project.json.tmp-999888777",
+                    ROOT_INODE, b"project.json", 0, _fake_ctx(),
+                )
+                await trio.sleep(0)  # let rename() start waiting on upload_done
+                allow_upload_to_finish.set()
+        return mock_move
+
+    mock_move = trio.run(scenario)
+
+    # Lost the race: upload_new_file was called with the stale name.
+    assert captured["name"] == "project.json.tmp-999888777"
+    # But rename() still applied the final rename server-side afterwards.
+    mock_move.assert_called_once_with(
+        "DRIVE!newfile", new_name="project.json", new_parent_id=None
+    )
+    assert fuse._index.lookup(ROOT_ID, "project.json")["id"] == "DRIVE!newfile"
+    assert fuse._index.lookup(ROOT_ID, "project.json.tmp-999888777") is None

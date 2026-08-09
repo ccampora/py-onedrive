@@ -4,6 +4,7 @@ import os
 import re
 import stat
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -52,6 +53,14 @@ class _WriteHandle:
     inode: int              # provisional or real inode
     size: int = 0           # current byte count (for getattr during write)
     provisional_id: str | None = None  # index key while item_id is None
+    # Guards name/parent_id/parent_inode against the rename() vs. _upload()
+    # race: _upload() runs in a worker thread and reads these fields to
+    # build the Graph upload call; rename() (on the trio thread) mutates
+    # them to redirect a not-yet-uploaded file. A plain threading.Lock is
+    # required (not trio.Lock) since the two sides run on different threads.
+    lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+    upload_started: bool = False   # True once _upload() has snapshotted name/parent_id
+    upload_done: trio.Event = dataclasses.field(default_factory=trio.Event)
 
 # Processes that probe file content for thumbnails/indexing but should NOT
 # trigger on-demand downloads. Add entries as needed for your desktop env.
@@ -430,7 +439,12 @@ class OneDriveFUSE(pyfuse3.Operations):
         return len(buf)
 
     async def release(self, fh):
-        handle = self._write_handles.pop(fh, None)
+        # Keep the handle in self._write_handles (not popped yet) until the
+        # upload attempt below finishes: rename() looks up still-open
+        # handles by provisional_id to redirect a not-yet-uploaded file to
+        # its new name/location, and it needs to find this one even though
+        # the fd has already been closed and release() has been invoked.
+        handle = self._write_handles.get(fh)
         if handle is None:
             return  # read-only handle — nothing to do
 
@@ -458,7 +472,9 @@ class OneDriveFUSE(pyfuse3.Operations):
                 self._ctrl.dec_pending()
                 self._ctrl.set_error(str(e))
         finally:
+            self._write_handles.pop(fh, None)
             self._pending_attrs.pop(handle.inode, None)
+            handle.upload_done.set()
             try:
                 os.unlink(handle.tmp_path)
             except OSError:
@@ -466,10 +482,18 @@ class OneDriveFUSE(pyfuse3.Operations):
 
     def _upload(self, handle: _WriteHandle):
         """Blocking: read temp file and upload to OneDrive. Runs in a thread."""
-        if _SKIP_UPLOAD.search(handle.name):
-            logger.debug(f"[upload] skipping temp file '{handle.name}'")
+        # Snapshot name/parent_id atomically with flipping upload_started —
+        # once this is set, rename() can no longer safely redirect this
+        # handle in place (see rename()) and must wait for us instead.
+        with handle.lock:
+            name = handle.name
+            parent_id = handle.parent_id
+            handle.upload_started = True
+
+        if _SKIP_UPLOAD.search(name):
+            logger.debug(f"[upload] skipping temp file '{name}'")
             if not handle.item_id:
-                self._index.delete(f"__pending__{handle.name}__{handle.parent_id}")
+                self._index.delete(f"__pending__{name}__{parent_id}")
             return
 
         with open(handle.tmp_path, "rb") as f:
@@ -477,14 +501,14 @@ class OneDriveFUSE(pyfuse3.Operations):
         if handle.item_id:
             item = overwrite_file(handle.item_id, content)
         else:
-            item = upload_new_file(handle.parent_id, handle.name, content)
+            item = upload_new_file(parent_id, name, content)
             # Remove the provisional placeholder so the real item takes its place
-            self._index.delete(f"__pending__{handle.name}__{handle.parent_id}")
+            self._index.delete(f"__pending__{name}__{parent_id}")
         self._index.upsert(item)
         # Update the content cache so subsequent reads are local
         etag = item.get("eTag", "")
         self._cache.put(item["id"], etag, content)
-        logger.info(f"[upload] '{handle.name}' complete — id={item['id']}")
+        logger.info(f"[upload] '{name}' complete — id={item['id']}")
 
     # ------------------------------------------------------------------
     # Write: create, mkdir, unlink, rmdir, rename, setattr
@@ -668,38 +692,69 @@ class OneDriveFUSE(pyfuse3.Operations):
         item_id = item["id"]
 
         if item_id.startswith("__pending__"):
-            # Upload hasn't happened yet (create()/write() only touch the
-            # local temp file) — there is nothing on the server to rename.
-            # Rewrite the provisional index entry and the still-open write
-            # handle in place so the eventual upload lands under the new
-            # name/location, and skip the Graph API call entirely.
-            new_provisional_id = f"__pending__{name_new}__{parent_id_new}"
-            new_item = dict(item)
-            new_item["id"] = new_provisional_id
-            new_item["name"] = name_new
-            new_item["parentReference"] = {"id": parent_id_new}
-            self._index.rebind(item_id, new_item)
-
+            # Upload may not have started yet (create()/write() only touch
+            # the local temp file) — if so, there is nothing on the server
+            # to rename: redirect the in-flight write handle and the
+            # provisional index entry in place, no Graph call needed.
+            #
+            # But release()'s upload can start within microseconds of
+            # close() returning, well before a client's follow-up rename()
+            # reaches us — faster than this redirect can win. handle.lock
+            # plus handle.upload_started make that race deterministic
+            # instead of silently uploading under the stale name: if the
+            # upload already snapshotted name/parent_id, fall back to
+            # waiting for it to finish, then do a normal Graph rename of
+            # the resulting real item.
             handle = next(
                 (h for h in self._write_handles.values()
                  if h.provisional_id == item_id),
                 None,
             )
+
+            redirected_locally = False
             if handle is not None:
-                handle.name = name_new
-                handle.parent_id = parent_id_new
-                handle.parent_inode = parent_inode_new
+                with handle.lock:
+                    if not handle.upload_started:
+                        handle.name = name_new
+                        handle.parent_id = parent_id_new
+                        handle.parent_inode = parent_inode_new
+                        redirected_locally = True
+
+            if redirected_locally:
+                new_provisional_id = f"__pending__{name_new}__{parent_id_new}"
+                new_item = dict(item)
+                new_item["id"] = new_provisional_id
+                new_item["name"] = name_new
+                new_item["parentReference"] = {"id": parent_id_new}
+                self._index.rebind(item_id, new_item)
                 handle.provisional_id = new_provisional_id
 
-            for inv_inode in {parent_inode_old, parent_inode_new}:
-                try:
-                    pyfuse3.invalidate_inode(inv_inode, attr_only=False)
-                except Exception:
-                    pass
-            logger.info(
-                f"rename '{name_old}' → '{name_new}' (pending upload, local-only)"
-            )
-            return
+                for inv_inode in {parent_inode_old, parent_inode_new}:
+                    try:
+                        pyfuse3.invalidate_inode(inv_inode, attr_only=False)
+                    except Exception:
+                        pass
+                logger.info(
+                    f"rename '{name_old}' → '{name_new}' (pending upload, local-only)"
+                )
+                return
+
+            # Lost the race (or, unexpectedly, no open handle at all): the
+            # upload is already in flight under the old name/parent. Wait
+            # for it to finish — bounded, so a stuck upload can't hang the
+            # rename forever — then rename the resulting real item normally.
+            if handle is not None:
+                with trio.move_on_after(30):
+                    await handle.upload_done.wait()
+
+            item = self._index.lookup(parent_id_old, name_old)
+            if item is None or item["id"].startswith("__pending__"):
+                logger.error(
+                    f"rename '{name_old}' → '{name_new}': upload of "
+                    f"'{name_old}' did not complete in time"
+                )
+                raise pyfuse3.FUSEError(errno.EIO)
+            item_id = item["id"]
 
         new_name = name_new if name_new != name_old else None
         new_parent = parent_id_new if parent_id_new != parent_id_old else None

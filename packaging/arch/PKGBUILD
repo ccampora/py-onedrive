@@ -1,6 +1,6 @@
 # Maintainer: ccampora <ccampora@gmail.com>
 pkgname=py-onedrive
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc="OneDrive Files On-Demand FUSE client for Linux"
 arch=('any')
@@ -8,7 +8,7 @@ url="https://github.com/ccampora/py-onedrive"
 license=('MIT')
 depends=('python' 'python-requests' 'python-pyfuse3' 'python-trio' 'fuse3')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/ccampora/py-onedrive/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('0a435580c5da97c86dedcf992e260ab10f22f2fa49247771de6489842b8dd7b0')
+sha256sums=('2f16cc68e1649b91f50a5e39c597d3e3d330ca0fb73f926251a3442ab15d065c')
 install=py-onedrive.install
 
 package() {
