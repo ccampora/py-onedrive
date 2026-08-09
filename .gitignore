@@ -7,3 +7,4 @@ packaging/arch/*.pkg.tar.zst.sig
 packaging/arch/py-onedrive-*.tar.gz
 packaging/arch/pkg/
 packaging/arch/src/
+*.deb
