@@ -2,3 +2,8 @@
 **/__pycache__/
 **/*.pyc
 applet/cosmic/target/*
+packaging/arch/*.pkg.tar.zst
+packaging/arch/*.pkg.tar.zst.sig
+packaging/arch/py-onedrive-*.tar.gz
+packaging/arch/pkg/
+packaging/arch/src/

@@ -1,0 +1,33 @@
+post_install() {
+	cat << 'EOF'
+
+  py-onedrive installed successfully.
+
+  Enable the user service:
+    systemctl --user daemon-reload
+    systemctl --user enable --now py-onedrive
+
+  On first run a browser window will open for Microsoft login.
+  Once authenticated, OneDrive appears at ~/OneDrive.
+
+  Check status / logs:
+    systemctl --user status py-onedrive
+    journalctl --user -u py-onedrive -f
+
+  Manual mount:
+    py-onedrive
+
+  Manual unmount:
+    fusermount3 -u ~/OneDrive
+
+EOF
+}
+
+post_upgrade() {
+	cat << 'EOF'
+
+  py-onedrive upgraded. Restart the service to pick up the new version:
+    systemctl --user restart py-onedrive
+
+EOF
+}
