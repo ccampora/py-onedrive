@@ -19,6 +19,14 @@ jobs:
             ruby ruby-dev rubygems build-essential \
             python3-pip fuse3 libfuse3-dev
 
+      # ubuntu-22.04's system `packaging` (21.3) is too old for recent
+      # pyfuse3 sdists, whose build backend requires packaging>=26.2 —
+      # pip's build isolation still sees the stale system copy on this
+      # image, so upgrade it up front rather than letting the pyfuse3
+      # build fail with a ContextualVersionConflict.
+      - name: Upgrade pip build tooling
+        run: python3 -m pip install --upgrade pip setuptools "packaging>=26.2"
+
       - name: Install fpm
         run: sudo gem install fpm --no-document
 
